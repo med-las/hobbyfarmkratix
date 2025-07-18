@@ -1,0 +1,123 @@
+# ansible/playbooks/session-user.yaml - Session-specific user management
+---
+- name: Session User Management
+  hosts: target
+  become: yes
+  vars:
+    session_user: "{{ session_name | default('training') }}"
+    session_user_home: "/home/{{ session_user }}"
+    
+  tasks:
+    - name: Create session-specific user
+      user:
+        name: "{{ session_user }}"
+        home: "{{ session_user_home }}"
+        shell: /bin/bash
+        groups: sudo
+        append: yes
+        generate_ssh_key: yes
+        ssh_key_bits: 2048
+        ssh_key_file: .ssh/id_rsa
+        state: present
+
+    - name: Set password for session user (optional)
+      user:
+        name: "{{ session_user }}"
+        password: "{{ session_password | default('$6$rounds=656000$salt$encrypted_password') | password_hash('sha512') }}"
+      when: session_password is defined
+
+    - name: Create workspace directory for session user
+      file:
+        path: "{{ session_user_home }}/workspace"
+        state: directory
+        owner: "{{ session_user }}"
+        group: "{{ session_user }}"
+        mode: '0755'
+
+    - name: Create session cleanup script
+      template:
+        src: cleanup-session.sh.j2
+        dest: "{{ session_user_home }}/cleanup-session.sh"
+        owner: "{{ session_user }}"
+        group: "{{ session_user }}"
+        mode: '0755'
+
+    - name: Copy SSH key from main user to session user
+      block:
+        - name: Get main user SSH public key
+          slurp:
+            src: "/home/{{ ansible_user }}/.ssh/authorized_keys"
+          register: main_user_ssh_key
+          ignore_errors: yes
+
+        - name: Add main user SSH key to session user
+          authorized_key:
+            user: "{{ session_user }}"
+            key: "{{ main_user_ssh_key.content | b64decode }}"
+          when: main_user_ssh_key is succeeded
+
+    - name: Set up sudo access for session user
+      lineinfile:
+        path: /etc/sudoers.d/{{ session_user }}
+        line: "{{ session_user }} ALL=(ALL) NOPASSWD:ALL"
+        create: yes
+        mode: '0440'
+
+    - name: Create session info file
+      copy:
+        content: |
+          Session User Information
+          =======================
+          
+          Session Name: {{ session_user }}
+          User Home: {{ session_user_home }}
+          Created: {{ ansible_date_time.iso8601 }}
+          Workspace: {{ session_user_home }}/workspace
+          
+          SSH Access:
+          ssh {{ session_user }}@{{ ansible_default_ipv4.address }}
+          
+          Cleanup Command:
+          sudo {{ session_user_home }}/cleanup-session.sh
+          
+          Or manual cleanup:
+          sudo userdel -r {{ session_user }}
+          sudo rm -f /etc/sudoers.d/{{ session_user }}
+        dest: "{{ session_user_home }}/session-info.txt"
+        owner: "{{ session_user }}"
+        group: "{{ session_user }}"
+        mode: '0644'
+
+# Session cleanup tasks (can be called separately)
+- name: Cleanup session user
+  hosts: target
+  become: yes
+  vars:
+    session_user: "{{ session_name | default('training') }}"
+  tasks:
+    - name: Stop all processes for session user
+      shell: "pkill -u {{ session_user }} || true"
+      ignore_errors: yes
+
+    - name: Remove session user
+      user:
+        name: "{{ session_user }}"
+        state: absent
+        remove: yes
+        force: yes
+
+    - name: Remove sudo access
+      file:
+        path: "/etc/sudoers.d/{{ session_user }}"
+        state: absent
+
+    - name: Clean up any session-specific services
+      systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: no
+      loop:
+        - "{{ session_user }}-*"
+      ignore_errors: yes
+
+  tags: cleanup

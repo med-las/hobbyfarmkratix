@@ -1,0 +1,46 @@
+# deploy/hobbyfarm-rbac-fix.yaml - FIXED VERSION
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hobbyfarm-services-reader
+rules:
+- apiGroups: ["hobbyfarm.io"]
+  resources: ["virtualmachinetemplates", "courses", "scenarios", "environments", "scheduledevents", "sessions", "virtualmachines", "virtualmachineclaims"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hobbyfarm-services-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: hobbyfarm-services-reader
+subjects:
+- kind: ServiceAccount
+  name: hobbyfarm-vmtemplate
+  namespace: hobbyfarm-system
+- kind: ServiceAccount
+  name: hobbyfarm-course
+  namespace: hobbyfarm-system
+- kind: ServiceAccount
+  name: hobbyfarm-environment
+  namespace: hobbyfarm-system
+- kind: ServiceAccount
+  name: hobbyfarm-scenario
+  namespace: hobbyfarm-system
+- kind: ServiceAccount
+  name: hobbyfarm-scheduledevent
+  namespace: hobbyfarm-system
+- kind: ServiceAccount
+  name: hobbyfarm-session
+  namespace: hobbyfarm-system
+- kind: ServiceAccount
+  name: hobbyfarm-vm
+  namespace: hobbyfarm-system
+- kind: ServiceAccount
+  name: hobbyfarm-gargantua
+  namespace: hobbyfarm-system

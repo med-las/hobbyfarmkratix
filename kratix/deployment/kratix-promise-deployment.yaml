@@ -1,0 +1,377 @@
+# kratix/deployment/kratix-promise-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hobbyfarm-provisioner-kratix
+  namespace: default
+  labels:
+    app: hobbyfarm-provisioner
+    component: kratix-integration
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hobbyfarm-provisioner
+      component: kratix-integration
+  template:
+    metadata:
+      labels:
+        app: hobbyfarm-provisioner
+        component: kratix-integration
+    spec:
+      serviceAccountName: hobbyfarm-provisioner
+      containers:
+        - name: provisioner
+          image: hobbyfarm-provisioner:local
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8443
+              name: webhook
+              protocol: TCP
+          env:
+            - name: INTEGRATION_MODE
+              value: "kratix-only"  # hybrid, hobbyfarm-only, kratix-only
+            - name: HOBBYFARM_DIRECT_MODE
+              value: "false"  # true = HobbyFarm→TrainingVMs, false = HobbyFarm→Kratix
+            - name: ENABLE_WEBHOOK
+              value: "true"
+            - name: WEBHOOK_PORT
+              value: "8443"
+            - name: LOG_LEVEL
+              value: "debug"
+            - name: STATIC_VM_POOL
+              value: "192.168.2.37,192.168.2.38"
+            - name: ENABLE_EC2_FALLBACK
+              value: "true"
+            - name: EC2_REGION
+              value: "us-east-1"
+            - name: KRATIX_ENABLED
+              value: "true"
+            - name: ANSIBLE_TIMEOUT
+              value: "300"
+            - name: ANSIBLE_RETRIES
+              value: "5"
+          volumeMounts:
+            - name: ssh-key
+              mountPath: /root/.ssh
+              readOnly: true
+            - name: config
+              mountPath: /etc/provisioner
+              readOnly: true
+            - name: ansible-playbooks
+              mountPath: /app/ansible
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8443
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8443
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: ssh-key
+          secret:
+            secretName: hobbyfarm-provisioner-ssh
+            defaultMode: 0600
+        - name: config
+          configMap:
+            name: hobbyfarm-provisioner-config
+        - name: ansible-playbooks
+          configMap:
+            name: hobbyfarm-provisioner-ansible
+
+---
+# kratix/deployment/kratix-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hobbyfarm-provisioner-kratix
+  labels:
+    app: hobbyfarm-provisioner
+    component: kratix-integration
+rules:
+# Original HobbyFarm permissions
+- apiGroups: ["training.example.com"]
+  resources: ["trainingvms", "trainingvmrequests"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["training.example.com"]
+  resources: ["trainingvms/status", "trainingvmrequests/status"]
+  verbs: ["get", "update", "patch"]
+- apiGroups: ["hobbyfarm.io"]
+  resources: ["sessions", "scenarios", "virtualmachines", "virtualmachineclaims"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: ["hobbyfarm.io"]
+  resources: ["virtualmachines/status"]
+  verbs: ["get", "update", "patch"]
+- apiGroups: [""]
+  resources: ["configmaps", "secrets", "events"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["ec2.aws.upbound.io"]
+  resources: ["instances"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apiextensions.crossplane.io"]
+  resources: ["compositions", "compositeresourcedefinitions"]
+  verbs: ["get", "list", "watch"]
+
+# NEW: Kratix Promise permissions
+- apiGroups: ["platform.kratix.io"]
+  resources: ["promises", "vm-provisioning-requests"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["platform.kratix.io"]
+  resources: ["vm-provisioning-requests/status"]
+  verbs: ["get", "update", "patch"]
+- apiGroups: ["platform.kratix.io"]
+  resources: ["promises/status"]
+  verbs: ["get", "update", "patch"]
+
+# Kratix Pipeline permissions
+- apiGroups: ["platform.kratix.io"]
+  resources: ["pipelines"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hobbyfarm-provisioner-kratix
+  labels:
+    app: hobbyfarm-provisioner
+    component: kratix-integration
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: hobbyfarm-provisioner-kratix
+subjects:
+- kind: ServiceAccount
+  name: hobbyfarm-provisioner
+  namespace: default
+
+---
+# kratix/deployment/kratix-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: hobbyfarm-provisioner-kratix-webhook
+  namespace: default
+  labels:
+    app: hobbyfarm-provisioner
+    component: kratix-integration
+spec:
+  selector:
+    app: hobbyfarm-provisioner
+    component: kratix-integration
+  ports:
+    - port: 443
+      targetPort: 8443
+      protocol: TCP
+      name: webhook
+  type: ClusterIP
+
+---
+# kratix/deployment/kratix-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hobbyfarm-provisioner-kratix-config
+  namespace: default
+  labels:
+    app: hobbyfarm-provisioner
+    component: kratix-integration
+data:
+  # Kratix-specific configuration
+  kratix-config.yaml: |
+    kratix:
+      enabled: true
+      integration_mode: "hybrid"
+      hobbyfarm_direct_mode: false
+      promise_name: "vm-provisioning"
+      promise_namespace: "default"
+
+    vm_provisioning:
+      static_vm_pool:
+        - "192.168.2.37"
+        - "192.168.2.38"
+
+      cloud_fallback:
+        enabled: true
+        providers:
+          aws:
+            region: "us-east-1"
+            instance_type: "t3.micro"
+            ami: "ami-0c02fb55956c7d316"
+            key_name: "hobbyfarm-keypair"
+            subnet_id: "subnet-09418e7f533840cde"
+            security_group_ids: ["sg-0bfde988b4d5f8110"]
+          azure:
+            location: "eastus"
+            vm_size: "Standard_B1s"
+            image: "ubuntu-20.04"
+          gcp:
+            zone: "us-central1-a"
+            machine_type: "e2-micro"
+            image: "ubuntu-2004-lts"
+
+    provisioning:
+      ansible:
+        timeout: "300s"
+        retries: 5
+        ssh_timeout: "120s"
+        default_playbooks:
+          - "base.yaml"
+          - "dynamic.yaml"
+
+      timeouts:
+        allocation: "10m"
+        provisioning: "15m"
+        boot_wait_static: "30s"
+        boot_wait_ec2: "2m"
+        ssh_timeout_static: "2m"
+        ssh_timeout_ec2: "5m"
+
+---
+# kratix/examples/vm-provisioning-request-example.yaml
+apiVersion: platform.kratix.io/v1alpha1
+kind: VMProvisioningRequest
+metadata:
+  name: example-vm-request
+  namespace: default
+  labels:
+    source: "manual-test"
+    environment: "development"
+spec:
+  user: "test-user"
+  session: "test-session-001"
+  scenario: "devops-docker-training"
+  vmTemplate: "hybrid-ubuntu-template"
+  timeout: 600
+  preferStaticVM: true
+
+  provisioning:
+    playbooks:
+      - "base.yaml"
+      - "dynamic.yaml"
+    packages:
+      - "docker.io"
+      - "kubectl"
+      - "vim"
+      - "git"
+    requirements:
+      - "ansible"
+      - "docker"
+    variables:
+      docker_install: "true"
+      k8s_tools: "true"
+      user_workspace: "true"
+
+  cloudFallback:
+    enabled: true
+    provider: "aws"
+    instanceType: "t3.micro"
+    region: "us-east-1"
+
+---
+# kratix/examples/hobbyfarm-session-example.yaml
+# This shows how a HobbyFarm session would automatically create a VMProvisioningRequest
+apiVersion: hobbyfarm.io/v1
+kind: Session
+metadata:
+  name: student-session-123
+  namespace: hobbyfarm-system
+spec:
+  user: "student-123"
+  scenario: "devops-docker-training"
+  course: "devops-course"
+  # This session will automatically create a VMProvisioningRequest via the integration controller
+
+---
+# kratix/examples/wso2-vm-request-example.yaml
+apiVersion: platform.kratix.io/v1alpha1
+kind: VMProvisioningRequest
+metadata:
+  name: wso2-training-vm
+  namespace: default
+  labels:
+    source: "manual-test"
+    training-type: "wso2"
+spec:
+  user: "wso2-student"
+  session: "wso2-session-001"
+  scenario: "wso2-basic-training"
+  vmTemplate: "hybrid-ubuntu-template"
+  timeout: 900  # WSO2 needs more time
+  preferStaticVM: true
+
+  provisioning:
+    playbooks:
+      - "base.yaml"
+      - "dynamic.yaml"
+      - "wso2-existing-user.yaml"
+    packages:
+      - "openjdk-11-jdk"
+      - "python3"
+      - "unzip"
+    requirements: []
+    variables:
+      wso2_version: "4.2.0"
+      wso2_install: "true"
+      java_version: "11"
+
+  cloudFallback:
+    enabled: true
+    provider: "aws"
+    instanceType: "t3.small"  # WSO2 needs more resources
+    region: "us-east-1"
+
+---
+# kratix/examples/web-dev-vm-request-example.yaml
+apiVersion: platform.kratix.io/v1alpha1
+kind: VMProvisioningRequest
+metadata:
+  name: webdev-training-vm
+  namespace: default
+  labels:
+    source: "manual-test"
+    training-type: "webdev"
+spec:
+  user: "webdev-student"
+  session: "webdev-session-001"
+  scenario: "web-development-training"
+  vmTemplate: "hybrid-ubuntu-template"
+  timeout: 600
+  preferStaticVM: true
+
+  provisioning:
+    playbooks:
+      - "base.yaml"
+      - "dynamic.yaml"
+    packages:
+      - "nodejs"
+      - "npm"
+      - "nginx"
+      - "git"
+    requirements:
+      - "express"
+      - "nodemon"
+    variables:
+      node_version: "18"
+      nginx_config: "development"
+
+  cloudFallback:
+    enabled: true
+    provider: "aws"
+    instanceType: "t3.micro"
+    region: "us-east-1"

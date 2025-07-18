@@ -1,0 +1,36 @@
+Session Information
+==================
+
+Session Name: {{ ansible_hostname }}
+Provisioned: {{ ansible_date_time.iso8601 }}
+
+Installed Packages:
+{% if session_info_packages %}
+{{ session_info_packages }}
+{% else %}
+Base packages only
+{% endif %}
+
+Python Requirements:
+{% if session_info_requirements %}
+{{ session_info_requirements }}
+{% else %}
+None specified
+{% endif %}
+
+Environment Variables:
+{% for key, value in hostvars[inventory_hostname].items() %}
+{% if key.startswith('session_') or key in ['wso2_install', 'k8s_install', 'docker_install'] %}
+{{ key }}: {{ value }}
+{% endif %}
+{% endfor %}
+
+Workspace: /home/kube/workspace/
+SSH User: {{ ansible_user }}
+Python Version: {{ ansible_python_version }}
+
+System Information:
+OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+Architecture: {{ ansible_architecture }}
+Kernel: {{ ansible_kernel }}
+Memory: {{ ansible_memtotal_mb }}MB

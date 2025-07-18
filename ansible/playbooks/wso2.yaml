@@ -1,0 +1,256 @@
+# ansible/playbooks/wso2.yaml - FIXED VERSION for both local and EC2
+---
+# WSO2 Setup Tasks - Fixed for dynamic user detection
+# Note: This file contains only tasks, not a full playbook
+# since it's included via include_tasks from dynamic.yaml
+
+- name: Set WSO2 variables
+  set_fact:
+    wso2_version: "{{ wso2_version | default('4.2.0') }}"
+    java_version: "{{ java_version | default('11') }}"
+    current_user: "{{ ansible_user }}"
+    current_user_home: "/home/{{ ansible_user }}"
+
+- name: Update apt cache for WSO2
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  become: yes
+
+- name: Install packages required for WSO2
+  apt:
+    name:
+      - vim
+      - curl
+      - wget
+      - git
+      - htop
+      - net-tools
+      - unzip
+      - python3
+    state: present
+  become: yes
+
+- name: Install Java for WSO2
+  apt:
+    name: "openjdk-{{ java_version }}-jdk"
+    state: present
+  become: yes
+
+- name: Create WSO2 user
+  user:
+    name: wso2
+    home: /home/wso2
+    shell: /bin/bash
+    state: present
+  become: yes
+
+- name: Create WSO2 directory
+  file:
+    path: /opt/wso2
+    state: directory
+    owner: wso2
+    group: wso2
+  become: yes
+
+# Create mock WSO2 installation (simplified for training)
+- name: Create mock WSO2 directory structure
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: wso2
+    group: wso2
+    mode: '0755'
+  loop:
+    - /opt/wso2/wso2am-{{ wso2_version }}
+    - /opt/wso2/wso2am-{{ wso2_version }}/bin
+    - /opt/wso2/wso2am-{{ wso2_version }}/repository
+    - /opt/wso2/wso2am-{{ wso2_version }}/repository/conf
+    - /opt/wso2/wso2am-{{ wso2_version }}/repository/logs
+    - /opt/wso2/wso2am-{{ wso2_version }}/lib
+  become: yes
+
+- name: Create mock web server script
+  copy:
+    content: |
+      #!/usr/bin/env python3
+      import http.server
+      import socketserver
+      import os
+      import sys
+      import signal
+      
+      class WSO2MockHandler(http.server.SimpleHTTPRequestHandler):
+          def do_GET(self):
+              self.send_response(200)
+              self.send_header('Content-type', 'text/html')
+              self.end_headers()
+              response = '''
+      <html><head><title>WSO2 API Manager Training</title></head>
+      <body>
+      <h1>🚀 WSO2 API Manager Training Environment</h1>
+      <h2>✅ Training Mock - Active</h2>
+      <p>WSO2 API Manager 4.2.0 Training Simulation</p>
+      <h3>Access Information:</h3>
+      <p><strong>URL:</strong> https://{{ ansible_default_ipv4.address }}:9443/</p>
+      <p><strong>Username:</strong> admin</p>
+      <p><strong>Password:</strong> admin</p>
+      <h3>Training Commands:</h3>
+      <ul>
+      <li>sudo systemctl status wso2</li>
+      <li>sudo systemctl restart wso2</li>
+      <li>sudo journalctl -u wso2 -f</li>
+      </ul>
+      </body></html>
+              '''
+              self.wfile.write(response.encode())
+      
+      def signal_handler(sig, frame):
+          print('WSO2 Mock Server shutting down...')
+          sys.exit(0)
+      
+      if __name__ == "__main__":
+          signal.signal(signal.SIGTERM, signal_handler)
+          signal.signal(signal.SIGINT, signal_handler)
+          PORT = 9443
+          with socketserver.TCPServer(("", PORT), WSO2MockHandler) as httpd:
+              print(f"WSO2 Mock Server running on port {PORT}")
+              httpd.serve_forever()
+    dest: /opt/wso2/wso2am-{{ wso2_version }}/bin/wso2-mock-server.py
+    owner: wso2
+    group: wso2
+    mode: '0755'
+  become: yes
+
+- name: Create WSO2 startup script
+  copy:
+    content: |
+      #!/bin/bash
+      export JAVA_HOME=/usr/lib/jvm/java-{{ java_version }}-openjdk-{{ ansible_architecture }}
+      export WSO2_HOME=/opt/wso2/wso2am-{{ wso2_version }}
+      PIDFILE=$WSO2_HOME/wso2carbon.pid
+      
+      case "$1" in
+        start)
+          echo "Starting WSO2 API Manager (Training Mock)..."
+          cd $WSO2_HOME
+          python3 $WSO2_HOME/bin/wso2-mock-server.py > $WSO2_HOME/repository/logs/wso2carbon.log 2>&1 &
+          echo $! > $PIDFILE
+          echo "WSO2 Mock started"
+          ;;
+        stop)
+          echo "Stopping WSO2 API Manager..."
+          if [ -f $PIDFILE ]; then
+            kill $(cat $PIDFILE) 2>/dev/null
+            rm -f $PIDFILE
+          fi
+          ;;
+        restart)
+          $0 stop
+          sleep 2
+          $0 start
+          ;;
+        status)
+          if [ -f $PIDFILE ] && ps -p $(cat $PIDFILE) > /dev/null 2>&1; then
+            echo "WSO2 Mock is running"
+            exit 0
+          else
+            echo "WSO2 Mock is not running"
+            exit 1
+          fi
+          ;;
+        *)
+          echo "Usage: $0 {start|stop|restart|status}"
+          exit 1
+          ;;
+      esac
+    dest: /opt/wso2/wso2am-{{ wso2_version }}/bin/api-manager.sh
+    owner: wso2
+    group: wso2
+    mode: '0755'
+  become: yes
+
+- name: Create WSO2 systemd service
+  copy:
+    content: |
+      [Unit]
+      Description=WSO2 API Manager
+      After=network.target
+
+      [Service]
+      Type=forking
+      User=wso2
+      Group=wso2
+      ExecStart=/opt/wso2/wso2am-{{ wso2_version }}/bin/api-manager.sh start
+      ExecStop=/opt/wso2/wso2am-{{ wso2_version }}/bin/api-manager.sh stop
+      PIDFile=/opt/wso2/wso2am-{{ wso2_version }}/wso2carbon.pid
+      Restart=on-failure
+      RestartSec=10
+      Environment="JAVA_HOME=/usr/lib/jvm/java-{{ java_version }}-openjdk-{{ ansible_architecture }}"
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/wso2.service
+    mode: '0644'
+  become: yes
+
+- name: Reload systemd
+  systemd:
+    daemon_reload: yes
+  become: yes
+
+- name: Start WSO2 service
+  systemd:
+    name: wso2
+    state: started
+    enabled: yes
+  become: yes
+
+- name: Wait for WSO2 to be ready
+  wait_for:
+    port: 9443
+    host: "{{ ansible_default_ipv4.address }}"
+    timeout: 60
+    delay: 5
+
+- name: Create WSO2 info file
+  copy:
+    content: |
+      WSO2 API Manager {{ wso2_version }} Training Environment
+      ======================================================
+      
+      🎓 TRAINING MODE: Mock Installation Active
+      
+      🌐 Access Information:
+      =====================
+      Main URL: https://{{ ansible_default_ipv4.address }}:9443/
+      Username: admin
+      Password: admin
+      
+      🛠️ System Commands:
+      ===================
+      Check Status: sudo systemctl status wso2
+      View Logs: sudo journalctl -u wso2 -f
+      Start Service: sudo systemctl start wso2
+      Stop Service: sudo systemctl stop wso2
+      Restart Service: sudo systemctl restart wso2
+      
+      📁 Directory Structure:
+      ======================
+      Installation: /opt/wso2/wso2am-{{ wso2_version }}/
+      Configuration: /opt/wso2/wso2am-{{ wso2_version }}/repository/conf/
+      Logs: /opt/wso2/wso2am-{{ wso2_version }}/repository/logs/
+      Scripts: /opt/wso2/wso2am-{{ wso2_version }}/bin/
+    dest: "{{ current_user_home }}/workspace/wso2-info.txt"
+    owner: "{{ current_user }}"
+    group: "{{ current_user }}"
+    mode: '0644'
+  become: yes
+
+- name: Display WSO2 completion message
+  debug:
+    msg:
+      - "🎉 WSO2 API Manager {{ wso2_version }} setup complete!"
+      - "🎓 Training mock installation is active"
+      - "🌐 Access at: https://{{ ansible_default_ipv4.address }}:9443/"
+      - "👤 Username: admin | Password: admin"

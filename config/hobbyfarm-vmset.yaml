@@ -1,0 +1,11 @@
+apiVersion: hobbyfarm.io/v1
+kind: VirtualMachineSet
+metadata:
+  name: hybrid-vm-set
+  namespace: default
+spec:
+  environment: "hybrid-training-env"
+  vm_template: "hybrid-ubuntu-template"
+  base_name: "training-vm"
+  restricted_bind: false
+  restricted_bind_value: ""

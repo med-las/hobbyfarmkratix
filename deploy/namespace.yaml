@@ -1,0 +1,7 @@
+# deploy/namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hobbyfarm-provisioner
+  labels:
+    app: hobbyfarm-provisioner

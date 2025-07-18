@@ -1,0 +1,125 @@
+# Fixed XRD with different name to avoid conflict
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xec2trainingvms.training.example.com
+spec:
+  group: training.example.com
+  names:
+    kind: XEC2TrainingVM
+    plural: xec2trainingvms
+  claimNames:
+    kind: EC2TrainingVM
+    plural: ec2trainingvms
+  versions:
+  - name: v1
+    served: true
+    referenceable: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              user:
+                type: string
+                description: "User for the training VM"
+              session:
+                type: string
+                description: "Session ID for the training VM"
+              instanceType:
+                type: string
+                description: "EC2 instance type"
+                default: "t3.micro"
+              region:
+                type: string
+                description: "AWS region"
+                default: "us-east-1"
+            required:
+            - user
+            - session
+          status:
+            type: object
+            properties:
+              vmIP:
+                type: string
+                description: "Public IP of the EC2 instance"
+              state:
+                type: string
+                description: "State of the VM"
+              instanceId:
+                type: string
+                description: "EC2 instance ID"
+              ready:
+                type: boolean
+                description: "Whether the VM is ready"
+
+---
+# Updated Composition to use the new XRD
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: ec2trainingvm-composition
+  labels:
+    crossplane.io/xrd: xec2trainingvms.training.example.com
+    provider: aws
+    service: ec2
+spec:
+  writeConnectionSecretsToNamespace: crossplane-system
+  compositeTypeRef:
+    apiVersion: training.example.com/v1
+    kind: XEC2TrainingVM
+  
+  resources:
+  - name: ec2-instance
+    base:
+      apiVersion: ec2.aws.upbound.io/v1beta1
+      kind: Instance
+      spec:
+        forProvider:
+          ami: ami-0c02fb55956c7d316  # Ubuntu 20.04 LTS
+          instanceType: t3.micro
+          region: us-east-1
+          subnetId: subnet-09418e7f533840cde
+          vpcSecurityGroupIds:
+          - sg-0bfde988b4d5f8110
+          keyName: hobbyfarm-keypair
+          associatePublicIpAddress: true
+          tags:
+            Name: hobbyfarm-training-vm
+            Environment: training
+            ManagedBy: crossplane
+          userData: |
+            #!/bin/bash
+            apt-get update
+            apt-get install -y python3 python3-pip openssh-server
+            systemctl enable ssh
+            systemctl start ssh
+            if ! id ubuntu >/dev/null 2>&1; then
+                useradd -m -s /bin/bash ubuntu
+                usermod -aG sudo ubuntu
+                mkdir -p /home/ubuntu/.ssh
+                chown ubuntu:ubuntu /home/ubuntu/.ssh
+                chmod 700 /home/ubuntu/.ssh
+            fi
+            touch /var/lib/cloud/instance/boot-finished
+        providerConfigRef:
+          name: aws-provider
+          
+    patches:
+    - type: FromCompositeFieldPath
+      fromFieldPath: spec.session
+      toFieldPath: spec.forProvider.tags.Session
+    - type: FromCompositeFieldPath
+      fromFieldPath: spec.user
+      toFieldPath: spec.forProvider.tags.User
+    - type: ToCompositeFieldPath
+      fromFieldPath: status.atProvider.publicIp
+      toFieldPath: status.vmIP
+    - type: ToCompositeFieldPath
+      fromFieldPath: status.atProvider.id
+      toFieldPath: status.instanceId
+    - type: ToCompositeFieldPath
+      fromFieldPath: status.atProvider.instanceState
+      toFieldPath: status.state

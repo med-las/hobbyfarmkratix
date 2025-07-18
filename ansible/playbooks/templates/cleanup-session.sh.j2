@@ -1,0 +1,111 @@
+#!/bin/bash
+# File: ansible/playbooks/templates/cleanup-session.sh.j2
+# Session cleanup script template for Ansible
+
+set -e
+
+SESSION_USER="{{ session_user }}"
+SESSION_HOME="{{ session_user_home }}"
+
+echo "🧹 Cleaning up session: $SESSION_USER"
+echo "========================================="
+
+# Function to log with timestamp
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+log "Starting cleanup for session user: $SESSION_USER"
+
+# Stop all processes for this user
+log "Stopping all processes for user $SESSION_USER..."
+pkill -u $SESSION_USER 2>/dev/null || log "No processes to kill for user $SESSION_USER"
+
+# Stop any session-specific services
+{% if wso2_install is defined and wso2_install | bool %}
+log "Stopping WSO2 service for session $SESSION_USER..."
+systemctl stop wso2-$SESSION_USER 2>/dev/null || log "WSO2 service not running"
+systemctl disable wso2-$SESSION_USER 2>/dev/null || log "WSO2 service not enabled"
+rm -f /etc/systemd/system/wso2-$SESSION_USER.service
+systemctl daemon-reload
+{% endif %}
+
+# Clean up Docker containers if Docker was installed
+{% if session_packages is defined and ('docker' in session_packages or 'docker.io' in session_packages) %}
+log "Cleaning up Docker containers for user $SESSION_USER..."
+# Run as the session user to clean their containers
+su - $SESSION_USER -c "docker container prune -f 2>/dev/null || true" || log "No Docker containers to clean"
+su - $SESSION_USER -c "docker image prune -f 2>/dev/null || true" || log "No Docker images to clean"
+su - $SESSION_USER -c "docker volume prune -f 2>/dev/null || true" || log "No Docker volumes to clean"
+{% endif %}
+
+# Remove temporary files and caches
+log "Cleaning up temporary files and caches..."
+rm -rf /tmp/$SESSION_USER-* 2>/dev/null || true
+rm -rf $SESSION_HOME/workspace/.cache 2>/dev/null || true
+rm -rf $SESSION_HOME/.cache 2>/dev/null || true
+rm -rf $SESSION_HOME/.local/share/containers 2>/dev/null || true
+rm -rf $SESSION_HOME/.docker 2>/dev/null || true
+
+# Clean up logs
+log "Cleaning up session logs..."
+find $SESSION_HOME -name "*.log" -delete 2>/dev/null || true
+find $SESSION_HOME -name "*.out" -delete 2>/dev/null || true
+
+# Clean up pip cache and Python artifacts
+log "Cleaning up Python artifacts..."
+rm -rf $SESSION_HOME/.pip 2>/dev/null || true
+rm -rf $SESSION_HOME/.local/lib/python*/site-packages/__pycache__ 2>/dev/null || true
+
+# Clean up any session-specific systemd services
+log "Cleaning up systemd services..."
+find /etc/systemd/system -name "*$SESSION_USER*" -delete 2>/dev/null || true
+systemctl daemon-reload
+
+# Remove from groups (but don't fail if already removed)
+log "Removing user from groups..."
+deluser $SESSION_USER docker 2>/dev/null || true
+deluser $SESSION_USER sudo 2>/dev/null || true
+
+# Remove sudo access
+log "Removing sudo access..."
+rm -f /etc/sudoers.d/$SESSION_USER
+
+# Final process cleanup (more aggressive)
+log "Final process cleanup..."
+pkill -9 -u $SESSION_USER 2>/dev/null || true
+
+# Remove user and home directory
+log "Removing user $SESSION_USER and home directory..."
+userdel -r $SESSION_USER 2>/dev/null || log "User $SESSION_USER already removed or removal failed"
+
+# Clean up any remaining files that might have been left behind
+log "Final cleanup of remaining files..."
+rm -rf $SESSION_HOME 2>/dev/null || true
+
+# Clean up any WSO2-related files in /opt if they exist
+{% if wso2_install is defined and wso2_install | bool %}
+log "Cleaning up WSO2 installation files..."
+rm -rf /opt/wso2-$SESSION_USER 2>/dev/null || true
+{% endif %}
+
+# Reset any file permissions that might have been changed
+log "Resetting system file permissions..."
+chmod 755 /tmp
+chmod 1777 /tmp
+
+log "✅ Session $SESSION_USER cleanup complete!"
+log "VM is ready for the next session."
+
+# Optional: Show cleanup summary
+log "Cleanup Summary:"
+log "- Session user '$SESSION_USER' removed"
+log "- Home directory '$SESSION_HOME' deleted"
+log "- All processes terminated"
+log "- Temporary files cleaned"
+log "- System services cleaned"
+log "- Sudo access revoked"
+
+echo ""
+echo "🎉 Session cleanup completed successfully!"
+echo "The VM is now ready for a new training session."

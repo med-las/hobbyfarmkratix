@@ -1,0 +1,19 @@
+# kratix/deployment/kratix-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: hobbyfarm-provisioner-kratix-webhook
+  namespace: default
+  labels:
+    app: hobbyfarm-provisioner
+    component: kratix-integration
+spec:
+  selector:
+    app: hobbyfarm-provisioner
+    component: kratix-integration
+  ports:
+    - port: 443
+      targetPort: 8443
+      protocol: TCP
+      name: webhook
+  type: ClusterIP

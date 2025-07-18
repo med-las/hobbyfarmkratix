@@ -1,0 +1,76 @@
+# deploy/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hobbyfarm-provisioner
+  namespace: default
+  labels:
+    app: hobbyfarm-provisioner
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hobbyfarm-provisioner
+  template:
+    metadata:
+      labels:
+        app: hobbyfarm-provisioner
+    spec:
+      serviceAccountName: hobbyfarm-provisioner
+      containers:
+        - name: provisioner
+          image: hobbyfarm/hybrid-provisioner:latest  # Build and push your image
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8443
+              name: webhook
+              protocol: TCP
+          env:
+            - name: ENABLE_WEBHOOK
+              value: "true"
+            - name: WEBHOOK_PORT
+              value: "8443"
+            - name: LOG_LEVEL
+              value: "debug"
+          volumeMounts:
+            - name: ssh-key
+              mountPath: /root/.ssh
+              readOnly: true
+            - name: config
+              mountPath: /etc/provisioner
+              readOnly: true
+            - name: ansible-playbooks
+              mountPath: /app/ansible
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8443
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8443
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: ssh-key
+          secret:
+            secretName: hobbyfarm-provisioner-ssh
+            defaultMode: 0600
+        - name: config
+          configMap:
+            name: hobbyfarm-provisioner-config
+        - name: ansible-playbooks
+          configMap:
+            name: hobbyfarm-provisioner-ansible

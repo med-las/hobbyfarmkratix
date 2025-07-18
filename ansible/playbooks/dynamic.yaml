@@ -1,0 +1,313 @@
+# ansible/playbooks/dynamic.yaml - MODIFIED VERSION: Use existing user instead of creating session users
+---
+- name: Dynamic Session Provisioning with Existing User
+  hosts: target
+  become: yes
+  vars:
+    # Use the existing SSH user instead of creating new ones
+    session_user: "{{ ansible_user }}"
+    session_user_home: "/home/{{ ansible_user }}"
+    session_name: "{{ session_name | default(ansible_hostname) }}"
+    
+    # Default packages that every session gets
+    base_packages:
+      - vim
+      - curl
+      - wget
+      - git
+      - htop
+      - net-tools
+      - python3
+      - python3-pip
+    
+    # Special packages that need custom installation
+    special_packages:
+      - docker.io
+      - docker
+      - kubectl
+      - helm
+    
+  tasks:
+    - name: Display session information
+      debug:
+        msg:
+          - "Setting up session for existing user: {{ session_user }}"
+          - "Session name: {{ session_name }}"
+          - "Session packages: {{ session_packages | default('none') }}"
+          - "Session requirements: {{ session_requirements | default('none') }}"
+
+    # FIXED: Create docker group first if it doesn't exist
+    - name: Ensure docker group exists
+      group:
+        name: docker
+        state: present
+
+    - name: Add existing user to docker group
+      user:
+        name: "{{ session_user }}"
+        groups: docker
+        append: yes
+
+    - name: Create session workspace directory
+      file:
+        path: "{{ session_user_home }}/workspace/{{ session_name }}"
+        state: directory
+        owner: "{{ session_user }}"
+        group: "{{ session_user }}"
+        mode: '0755'
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install base packages
+      apt:
+        name: "{{ base_packages }}"
+        state: present
+
+    - name: Filter session packages for apt installation
+      set_fact:
+        apt_packages: "{{ (session_packages | default('')).split(',') | reject('equalto', '') | difference(special_packages) | list }}"
+      when: session_packages is defined and session_packages != ""
+
+    - name: Install regular session-specific packages
+      apt:
+        name: "{{ apt_packages }}"
+        state: present
+      when: apt_packages is defined and apt_packages | length > 0
+
+    - name: Install Python requirements as existing user
+      pip:
+        name: "{{ item }}"
+        state: present
+        extra_args: --user
+      loop: "{{ (session_requirements | default('')).split(',') | reject('equalto', '') | list }}"
+      when: session_requirements is defined and session_requirements != ""
+      become_user: "{{ session_user }}"
+      environment:
+        HOME: "{{ session_user_home }}"
+      ignore_errors: yes
+
+    # Docker setup (if requested)
+    - name: Install Docker for session
+      block:
+        - name: Remove conflicting packages
+          apt:
+            name:
+              - docker.io
+              - docker-doc
+              - docker-compose
+              - podman-docker
+              - containerd
+              - runc
+            state: absent
+          ignore_errors: yes
+
+        - name: Install prerequisites for Docker
+          apt:
+            name:
+              - ca-certificates
+              - curl
+              - gnupg
+              - lsb-release
+            state: present
+
+        - name: Create keyrings directory
+          file:
+            path: /etc/apt/keyrings
+            state: directory
+            mode: '0755'
+
+        - name: Add Docker GPG key
+          shell: |
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+            chmod a+r /etc/apt/keyrings/docker.gpg
+          args:
+            creates: /etc/apt/keyrings/docker.gpg
+
+        - name: Add Docker repository
+          shell: |
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable" > /etc/apt/sources.list.d/docker.list
+
+        - name: Update apt cache after adding Docker repo
+          apt:
+            update_cache: yes
+
+        - name: Install Docker CE
+          apt:
+            name:
+              - docker-ce
+              - docker-ce-cli
+              - containerd.io
+            state: present
+
+        - name: Add existing user to docker group
+          user:
+            name: "{{ session_user }}"
+            groups: docker
+            append: yes
+
+        - name: Start and enable Docker
+          systemd:
+            name: docker
+            state: started
+            enabled: yes
+
+        - name: Test Docker installation as existing user
+          shell: docker run hello-world
+          become_user: "{{ session_user }}"
+          register: docker_test
+          ignore_errors: yes
+
+      when:
+        - session_packages is defined
+        - "'docker.io' in session_packages or 'docker' in session_packages"
+
+    # FIXED: kubectl setup with correct architecture detection
+    - name: Install kubectl for session
+      block:
+        - name: Detect architecture for kubectl
+          set_fact:
+            kubectl_arch: "{{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' }}"
+
+        - name: Download kubectl
+          get_url:
+            url: "https://dl.k8s.io/release/v1.28.0/bin/linux/{{ kubectl_arch }}/kubectl"
+            dest: /usr/local/bin/kubectl
+            mode: '0755'
+          retries: 3
+          delay: 5
+
+        - name: Create kubectl config directory for existing user
+          file:
+            path: "{{ session_user_home }}/.kube"
+            state: directory
+            owner: "{{ session_user }}"
+            group: "{{ session_user }}"
+            mode: '0755'
+
+      when:
+        - session_packages is defined
+        - "'kubectl' in session_packages"
+
+    # FIXED: Helm setup with better error handling
+    - name: Install Helm for session
+      block:
+        - name: Download Helm install script
+          get_url:
+            url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+            dest: /tmp/get-helm-3.sh
+            mode: '0755'
+          retries: 3
+          delay: 5
+
+        - name: Install Helm
+          shell: /tmp/get-helm-3.sh
+          environment:
+            DESIRED_VERSION: v3.12.0
+          args:
+            creates: /usr/local/bin/helm
+
+      when:
+        - session_packages is defined
+        - "'helm' in session_packages"
+
+    # Java setup (if requested)
+    - name: Install and configure Java for session
+      block:
+        - name: Determine Java version
+          set_fact:
+            java_version_to_install: "{{ 'openjdk-11-jdk' if 'openjdk-11-jdk' in (session_packages | default('')) else 'openjdk-17-jdk' }}"
+            java_home_version: "{{ '11' if 'openjdk-11-jdk' in (session_packages | default('')) else '17' }}"
+
+        - name: Install Java packages
+          apt:
+            name: "{{ java_version_to_install }}"
+            state: present
+
+        - name: Set JAVA_HOME for existing user
+          lineinfile:
+            path: "{{ session_user_home }}/.bashrc"
+            line: "export JAVA_HOME=/usr/lib/jvm/java-{{ java_home_version }}-openjdk-{{ ansible_architecture }}"
+            create: yes
+            owner: "{{ session_user }}"
+            group: "{{ session_user }}"
+
+      when:
+        - session_packages is defined
+        - "'java' in session_packages or 'openjdk' in session_packages"
+
+    # WSO2 setup - modified to use existing user
+    - name: Setup WSO2 for existing user
+      include_tasks: wso2-existing-user.yaml
+      when:
+        - wso2_install is defined
+        - wso2_install | default(false) | bool
+
+    - name: Create session info file
+      copy:
+        content: |
+          Session Information
+          ==================
+
+          Session Name: {{ session_name }}
+          User: {{ session_user }}
+          User Home: {{ session_user_home }}
+          Provisioned: {{ ansible_date_time.iso8601 }}
+
+          🔐 SSH Access:
+          ssh {{ session_user }}@{{ ansible_default_ipv4.address }}
+
+          📁 Session Workspace:
+          {{ session_user_home }}/workspace/{{ session_name }}/
+
+          📁 User Home:
+          {{ session_user_home }}
+
+          📦 Installed Packages:
+          {% if session_packages is defined %}
+          {{ session_packages.replace(',', ', ') }}
+          {% else %}
+          Base packages only
+          {% endif %}
+
+          🐍 Python Requirements:
+          {% if session_requirements is defined %}
+          {{ session_requirements.replace(',', ', ') }}
+          {% else %}
+          None specified
+          {% endif %}
+
+          🛠️ Special Tools:
+          Docker: {{ 'Installed' if (session_packages is defined and ('docker.io' in session_packages or 'docker' in session_packages)) else 'Not installed' }}
+          Kubectl: {{ 'Installed' if (session_packages is defined and 'kubectl' in session_packages) else 'Not installed' }}
+          Helm: {{ 'Installed' if (session_packages is defined and 'helm' in session_packages) else 'Not installed' }}
+          Java: {{ 'Installed' if (session_packages is defined and ('java' in session_packages or 'openjdk' in session_packages)) else 'Not installed' }}
+          WSO2: {{ 'Installed' if (wso2_install is defined and wso2_install | bool) else 'Not installed' }}
+
+          💻 System Information:
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          Architecture: {{ ansible_architecture }}
+          Memory: {{ ansible_memtotal_mb }}MB
+
+          🧹 Session Cleanup:
+          To clean up this session workspace:
+          rm -rf {{ session_user_home }}/workspace/{{ session_name }}
+
+          Note: This session uses the existing user {{ session_user }}.
+          No user cleanup is needed - just workspace cleanup.
+
+        dest: "{{ session_user_home }}/workspace/{{ session_name }}/session-info.txt"
+        owner: "{{ session_user }}"
+        group: "{{ session_user }}"
+        mode: '0644'
+
+    - name: Display session completion message
+      debug:
+        msg:
+          - "✅ Session setup complete for existing user: {{ session_user }}"
+          - "📛 Session name: {{ session_name }}"
+          - "🔐 SSH access: ssh {{ session_user }}@{{ ansible_default_ipv4.address }}"
+          - "📁 Session workspace: {{ session_user_home }}/workspace/{{ session_name }}/"
+          - "🧹 Cleanup: rm -rf {{ session_user_home }}/workspace/{{ session_name }}"

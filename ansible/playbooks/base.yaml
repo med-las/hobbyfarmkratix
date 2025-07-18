@@ -1,0 +1,61 @@
+# ansible/playbooks/base.yaml - FIXED VERSION for both local and EC2
+---
+- name: Base VM Setup
+  hosts: target
+  become: yes
+  tasks:
+    - name: Clean up any existing Docker repositories first
+      block:
+        - name: Remove conflicting Docker repository files
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/apt/sources.list.d/docker.list
+            - /etc/apt/keyrings/docker.gpg
+            - /usr/share/keyrings/docker-archive-keyring.gpg
+          ignore_errors: yes
+
+        - name: Remove any Docker-related apt sources
+          shell: |
+            find /etc/apt/sources.list.d/ -name "*docker*" -delete
+            find /etc/apt/keyrings/ -name "*docker*" -delete
+          ignore_errors: yes
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install basic packages
+      apt:
+        name:
+          - vim
+          - curl
+          - wget
+          - git
+          - htop
+          - net-tools
+          - python3
+          - python3-pip
+          - ca-certificates
+          - gnupg
+          - lsb-release
+        state: present
+
+    - name: Set timezone
+      timezone:
+        name: UTC
+
+    - name: Detect current user
+      set_fact:
+        current_user: "{{ ansible_user }}"
+        current_user_home: "/home/{{ ansible_user }}"
+
+    - name: Create workspace directory
+      file:
+        path: "{{ current_user_home }}/workspace"
+        state: directory
+        owner: "{{ current_user }}"
+        group: "{{ current_user }}"
+        mode: '0755'

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: hobbyfarm-provisioner-webhook
+  namespace: default
+  labels:
+    app: hobbyfarm-provisioner
+spec:
+  selector:
+    app: hobbyfarm-provisioner
+  ports:
+    - port: 443
+      targetPort: 8443
+      protocol: TCP
+      name: webhook
+  type: ClusterIP

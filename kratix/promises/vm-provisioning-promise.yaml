@@ -1,0 +1,190 @@
+# kratix/promises/vm-provisioning-promise.yaml
+apiVersion: platform.kratix.io/v1alpha1
+kind: Promise
+metadata:
+  name: vm-provisioning
+  namespace: default
+spec:
+  api:
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      name: vm-provisioning-requests.platform.kratix.io
+    spec:
+      group: platform.kratix.io
+      versions:
+      - name: v1alpha1
+        served: true
+        storage: true
+        schema:
+          openAPIV3Schema:
+            type: object
+            properties:
+              spec:
+                type: object
+                properties:
+                  # Basic VM requirements
+                  user:
+                    type: string
+                    description: "User requesting the VM"
+                  session:
+                    type: string
+                    description: "Session ID for the VM"
+                  scenario:
+                    type: string
+                    description: "Scenario/course for the VM"
+                  # VM configuration
+                  vmTemplate:
+                    type: string
+                    description: "VM template to use"
+                    default: "hybrid-ubuntu-template"
+                  timeout:
+                    type: integer
+                    description: "Timeout in seconds for VM provisioning"
+                    default: 600
+                  preferStaticVM:
+                    type: boolean
+                    description: "Prefer static VM over cloud instances"
+                    default: true
+                  # Provisioning configuration
+                  provisioning:
+                    type: object
+                    properties:
+                      playbooks:
+                        type: array
+                        items:
+                          type: string
+                        description: "Ansible playbooks to run"
+                        default: ["base.yaml", "dynamic.yaml"]
+                      packages:
+                        type: array
+                        items:
+                          type: string
+                        description: "Packages to install"
+                        default: []
+                      requirements:
+                        type: array
+                        items:
+                          type: string
+                        description: "Python requirements to install"
+                        default: []
+                      variables:
+                        type: object
+                        additionalProperties:
+                          type: string
+                        description: "Ansible variables"
+                        default: {}
+                  # Cloud fallback configuration
+                  cloudFallback:
+                    type: object
+                    properties:
+                      enabled:
+                        type: boolean
+                        description: "Enable cloud fallback if static VMs unavailable"
+                        default: true
+                      provider:
+                        type: string
+                        description: "Cloud provider (aws, azure, gcp)"
+                        default: "aws"
+                      instanceType:
+                        type: string
+                        description: "Cloud instance type"
+                        default: "t3.micro"
+                      region:
+                        type: string
+                        description: "Cloud region"
+                        default: "us-east-1"
+                required:
+                - user
+                - session
+              status:
+                type: object
+                properties:
+                  vmIP:
+                    type: string
+                    description: "Assigned VM IP address"
+                  state:
+                    type: string
+                    description: "VM state"
+                    enum: ["pending", "allocated", "provisioning", "ready", "failed", "released"]
+                  vmType:
+                    type: string
+                    description: "Type of VM (static, ec2, azure, gcp)"
+                  instanceId:
+                    type: string
+                    description: "Cloud instance ID if applicable"
+                  provisioned:
+                    type: boolean
+                    description: "Whether VM is fully provisioned"
+                  allocatedAt:
+                    type: string
+                    format: date-time
+                    description: "When VM was allocated"
+                  readyAt:
+                    type: string
+                    format: date-time
+                    description: "When VM became ready"
+                  lastError:
+                    type: string
+                    description: "Last error message"
+                  retryCount:
+                    type: integer
+                    description: "Number of retry attempts"
+                  sshCredentials:
+                    type: object
+                    properties:
+                      username:
+                        type: string
+                      secretName:
+                        type: string
+                      port:
+                        type: integer
+                        default: 22
+                  endpoints:
+                    type: object
+                    properties:
+                      ssh:
+                        type: string
+                      web:
+                        type: string
+                      shell:
+                        type: string
+        subresources:
+          status: {}
+      scope: Namespaced
+      names:
+        plural: vm-provisioning-requests
+        singular: vm-provisioning-request
+        kind: VMProvisioningRequest
+  workflows:
+    resource:
+      configure:
+      - apiVersion: platform.kratix.io/v1alpha1
+        kind: Pipeline
+        metadata:
+          name: vm-provisioning-configure
+        spec:
+          containers:
+          - image: hobbyfarm/vm-provisioner-pipeline:latest
+            name: vm-provisioner
+            env:
+            - name: STATIC_VM_POOL
+              value: "192.168.2.37,192.168.2.38"
+            - name: ENABLE_EC2_FALLBACK
+              value: "true"
+            - name: ANSIBLE_TIMEOUT
+              value: "300"
+            volumeMounts:
+            - name: ssh-key
+              mountPath: /etc/ssh-key
+              readOnly: true
+            - name: ansible-playbooks
+              mountPath: /etc/ansible/playbooks
+              readOnly: true
+          volumes:
+          - name: ssh-key
+            secret:
+              secretName: hobbyfarm-provisioner-ssh
+          - name: ansible-playbooks
+            configMap:
+              name: hobbyfarm-provisioner-ansible

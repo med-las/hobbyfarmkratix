@@ -1,0 +1,82 @@
+# config/hobbyfarm-scenarios-fixed.yaml - CORRECTED to match working config
+apiVersion: hobbyfarm.io/v1
+kind: Scenario
+metadata:
+  name: devops-docker-training
+  namespace: hobbyfarm-system
+  annotations:
+    provisioning.hobbyfarm.io/packages: "docker.io,kubectl,helm"
+    provisioning.hobbyfarm.io/playbooks: "base.yaml,dynamic.yaml"
+    provisioning.hobbyfarm.io/variables: |
+      docker_install=true
+      k8s_tools=true
+spec:
+  name: "DevOps - Docker & Kubernetes"
+  description: "Learn Docker and Kubernetes fundamentals"
+  steps:
+    - title: "Docker Environment Setup"
+      content: |
+        # Docker Training Environment
+        Your development environment includes:
+        - Docker CE
+        - kubectl (Kubernetes CLI)
+        - Helm package manager
+
+        ## Access Information
+        - SSH: ssh {{.session}}@{{.vmIP}}
+        - Docker: docker --version
+
+---
+apiVersion: hobbyfarm.io/v1
+kind: Scenario
+metadata:
+  name: web-development-training
+  namespace: hobbyfarm-system
+  annotations:
+    provisioning.hobbyfarm.io/packages: "nodejs,npm,nginx"
+    provisioning.hobbyfarm.io/playbooks: "base.yaml,dynamic.yaml"
+    provisioning.hobbyfarm.io/variables: |
+      node_version=18
+      nginx_config=development
+spec:
+  name: "Web Development with Node.js"
+  description: "Learn modern web development"
+  steps:
+    - title: "Development Environment"
+      content: |
+        # Web Development Environment
+        Your environment includes:
+        - Node.js 18
+        - npm package manager
+        - nginx web server
+
+        ## Quick Start
+        - SSH: ssh {{.session}}@{{.vmIP}}
+        - Dev Server: http://{{.vmIP}}:3000
+
+---
+apiVersion: hobbyfarm.io/v1
+kind: Scenario
+metadata:
+  name: wso2-basic-training
+  namespace: hobbyfarm-system
+  annotations:
+    provisioning.hobbyfarm.io/packages: "openjdk-11-jdk"
+    provisioning.hobbyfarm.io/playbooks: "base.yaml,dynamic.yaml"
+    provisioning.hobbyfarm.io/variables: |
+      wso2_version=4.2.0
+      wso2_install=true
+      java_version=11
+spec:
+  name: "WSO2 API Manager - Basic Training"
+  description: "Introduction to WSO2 API Manager"
+  steps:
+    - title: "Welcome to WSO2 Training"
+      content: |
+        # WSO2 API Manager Training
+        Welcome to the WSO2 API Manager training environment.
+
+        ## Your VM Details
+        - SSH Access: ssh {{.session}}@{{.vmIP}}
+        - WSO2 Console: https://{{.vmIP}}:9443/
+        - Username: admin / Password: admin

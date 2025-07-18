@@ -1,0 +1,123 @@
+
+# Service Account
+
+apiVersion: v1
+
+kind: ServiceAccount
+
+metadata:
+
+  name: hobbyfarm-provisioner
+
+  namespace: default
+
+  labels:
+
+    app: hobbyfarm-provisioner
+
+---
+
+# ClusterRole with all necessary permissions
+
+apiVersion: rbac.authorization.k8s.io/v1
+
+kind: ClusterRole
+
+metadata:
+
+  name: hobbyfarm-provisioner
+
+  labels:
+
+    app: hobbyfarm-provisioner
+
+rules:
+
+# TrainingVMs - Full access
+
+- apiGroups: ["training.example.com"]
+
+  resources: ["trainingvms", "trainingvmrequests"]
+
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# TrainingVMs status - Needed for patching status
+
+- apiGroups: ["training.example.com"]
+
+  resources: ["trainingvms/status", "trainingvmrequests/status"]
+
+  verbs: ["get", "update", "patch"]
+
+# HobbyFarm resources - Read access
+
+- apiGroups: ["hobbyfarm.io"]
+
+  resources: ["sessions", "scenarios", "virtualmachines", "virtualmachineclaims"]
+
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+# HobbyFarm VirtualMachine status - For updating VM status
+
+- apiGroups: ["hobbyfarm.io"]
+
+  resources: ["virtualmachines/status"]
+
+  verbs: ["get", "update", "patch"]
+
+# Core resources
+
+- apiGroups: [""]
+
+  resources: ["configmaps", "secrets", "events"]
+
+  verbs: ["get", "list", "watch"]
+
+# EC2/Crossplane resources (if using EC2 fallback)
+
+- apiGroups: ["ec2.aws.upbound.io"]
+
+  resources: ["instances"]
+
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# Crossplane Compositions
+
+- apiGroups: ["apiextensions.crossplane.io"]
+
+  resources: ["compositions", "compositeresourcedefinitions"]
+
+  verbs: ["get", "list", "watch"]
+
+---
+
+# ClusterRoleBinding
+
+apiVersion: rbac.authorization.k8s.io/v1
+
+kind: ClusterRoleBinding
+
+metadata:
+
+  name: hobbyfarm-provisioner
+
+  labels:
+
+    app: hobbyfarm-provisioner
+
+roleRef:
+
+  apiGroup: rbac.authorization.k8s.io
+
+  kind: ClusterRole
+
+  name: hobbyfarm-provisioner
+
+subjects:
+
+- kind: ServiceAccount
+
+  name: hobbyfarm-provisioner
+
+  namespace: default
+

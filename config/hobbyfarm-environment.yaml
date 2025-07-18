@@ -1,0 +1,35 @@
+# config/hobbyfarm-environment-fixed.yaml - CORRECTED to match working config
+apiVersion: hobbyfarm.io/v1
+kind: Environment
+metadata:
+  name: default-env
+  namespace: hobbyfarm-system
+spec:
+  display_name: "Training Environment"
+  dnssuffix: "192.168.2.47.nip.io"
+  provider: "hybrid-provisioner"
+  count_capacity:
+    training-vm-template: 10
+    ubuntu-training: 10
+  template_mapping:
+    training-vm-template:
+      image: "ubuntu:20.04"
+      name: "Training VM - Hybrid Provisioner"
+    ubuntu:
+      hybrid-ubuntu-template: "ubuntu-training"
+      hybrid-vm-template: "ubuntu-training"
+      training-vm-template: "training-vm-template"
+      ubuntu-training: "ubuntu-training"
+    ubuntu-training:
+      image: "ubuntu:20.04"
+      name: "Ubuntu Training VM"
+  environment_specifics:
+    custom_provisioner: "true"
+    ec2Fallback: "true"
+    provisioner: "hybrid-provisioner"
+    staticVMPool: "192.168.2.37,192.168.2.38"
+    allocationTimeout: "600s"
+    bootWaitEC2: "120s"
+    bootWaitStatic: "30s"
+    maxRetries: "3"
+  ws_endpoint: "wss://shell.192.168.2.47.nip.io"

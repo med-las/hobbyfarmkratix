@@ -1,0 +1,50 @@
+# config/hobbyfarm-courses-fixed.yaml - CORRECTED to match working config
+apiVersion: hobbyfarm.io/v1
+kind: Course
+metadata:
+  name: devops-course
+  namespace: hobbyfarm-system
+spec:
+  name: "DevOps Training"
+  description: "Docker and Kubernetes hands-on training"
+  keepalive_duration: "60m"
+  pauseable: false
+  scenarios:
+    - "devops-docker-training"
+  virtualmachines:
+    - count: "1"
+      template: "hybrid-ubuntu-template"  # This matches working config
+
+---
+apiVersion: hobbyfarm.io/v1
+kind: Course
+metadata:
+  name: webdev-course
+  namespace: hobbyfarm-system
+spec:
+  name: "Web Development Training"
+  description: "Node.js web development training"
+  keepalive_duration: "60m"
+  pauseable: false
+  scenarios:
+    - "web-development-training"
+  virtualmachines:
+    - count: "1"
+      template: "hybrid-ubuntu-template"  # This matches working config
+
+---
+apiVersion: hobbyfarm.io/v1
+kind: Course
+metadata:
+  name: wso2-course
+  namespace: hobbyfarm-system
+spec:
+  name: "WSO2 API Manager Training"
+  description: "Learn WSO2 API Manager with hands-on labs"
+  keepalive_duration: "60m"
+  pauseable: false
+  scenarios:
+    - "wso2-basic-training"
+  virtualmachines:
+    - count: "1"
+      template: "hybrid-ubuntu-template"  # This matches working config

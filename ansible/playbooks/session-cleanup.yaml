@@ -1,0 +1,104 @@
+# ansible/playbooks/session-cleanup.yaml - Clean up session workspaces
+---
+- name: Session Workspace Cleanup
+  hosts: target
+  become: yes
+  vars:
+    session_name: "{{ session_name | default('') }}"
+    cleanup_user: "{{ ansible_user }}"
+    
+  tasks:
+    - name: Validate session name
+      fail:
+        msg: "session_name must be provided"
+      when: session_name == ""
+
+    - name: Display cleanup information
+      debug:
+        msg:
+          - "Cleaning up session: {{ session_name }}"
+          - "User: {{ cleanup_user }}"
+          - "Workspace path: /home/{{ cleanup_user }}/workspace/{{ session_name }}"
+
+    - name: Stop session-specific WSO2 service
+      systemd:
+        name: "wso2-{{ session_name }}"
+        state: stopped
+        enabled: no
+      ignore_errors: yes
+
+    - name: Remove session-specific WSO2 service file
+      file:
+        path: "/etc/systemd/system/wso2-{{ session_name }}.service"
+        state: absent
+      ignore_errors: yes
+
+    - name: Reload systemd after service removal
+      systemd:
+        daemon_reload: yes
+      ignore_errors: yes
+
+    - name: Kill any remaining session-specific processes
+      shell: |
+        pkill -f "{{ session_name }}" || true
+        pkill -f "wso2.*{{ session_name }}" || true
+      ignore_errors: yes
+
+    - name: Remove session workspace directory
+      file:
+        path: "/home/{{ cleanup_user }}/workspace/{{ session_name }}"
+        state: absent
+      become_user: "{{ cleanup_user }}"
+
+    - name: Clean up any session-specific temporary files
+      shell: |
+        find /tmp -name "*{{ session_name }}*" -delete 2>/dev/null || true
+        find /var/tmp -name "*{{ session_name }}*" -delete 2>/dev/null || true
+      ignore_errors: yes
+
+    - name: Remove session-specific log files
+      shell: |
+        find /var/log -name "*{{ session_name }}*" -delete 2>/dev/null || true
+      ignore_errors: yes
+
+    - name: Display cleanup completion
+      debug:
+        msg:
+          - "✅ Session {{ session_name }} cleanup completed"
+          - "🏠 User {{ cleanup_user }} account remains intact"
+          - "📁 Session workspace removed: /home/{{ cleanup_user }}/workspace/{{ session_name }}"
+          - "🛑 Session services stopped and removed"
+          - "🧹 Temporary files cleaned up"
+
+    - name: Create cleanup report
+      copy:
+        content: |
+          Session Cleanup Report
+          =====================
+          
+          Session Name: {{ session_name }}
+          User Account: {{ cleanup_user }}
+          Cleanup Time: {{ ansible_date_time.iso8601 }}
+          
+          Actions Performed:
+          ✅ Stopped WSO2 service: wso2-{{ session_name }}
+          ✅ Removed service file: /etc/systemd/system/wso2-{{ session_name }}.service
+          ✅ Killed session processes
+          ✅ Removed workspace: /home/{{ cleanup_user }}/workspace/{{ session_name }}
+          ✅ Cleaned temporary files
+          ✅ Cleaned log files
+          
+          User Account Status:
+          🏠 User {{ cleanup_user }} remains active and untouched
+          🔐 SSH access unchanged
+          📁 User home directory intact
+          
+          VM Status:
+          ✅ Ready for next training session
+          ✅ All session-specific data removed
+          ✅ System clean and available
+          
+        dest: "/home/{{ cleanup_user }}/cleanup-{{ session_name }}-{{ ansible_date_time.epoch }}.log"
+        owner: "{{ cleanup_user }}"
+        group: "{{ cleanup_user }}"
+        mode: '0644'

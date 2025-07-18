@@ -1,0 +1,33 @@
+apiVersion: hobbyfarm.io/v1
+kind: VirtualMachineTemplate
+metadata:
+  name: training-vm-template
+  namespace: hobbyfarm-system
+  labels:
+    environment: default-env
+    provisioner: hybrid-provisioner
+spec:
+  name: "Training VM - Hybrid Provisioner"
+  image: "ubuntu:20.04"
+  config_map:
+    allocation_timeout: "600s"
+    boot_wait_ec2: "120s"
+    boot_wait_static: "30s"
+    cpu: "2"
+    default_playbooks: "base.yaml,dynamic.yaml"
+    disk: "20Gi"
+    ec2_fallback: "true"
+    memory: "4Gi"
+    network_type: "hybrid"
+    provisioner: "hybrid-provisioner"
+    ssh_port: "22"
+    ssh_timeout: "120"
+    ssh_user_detection: "true"
+    static_vm_pool: "192.168.2.37,192.168.2.38"
+    supports_ansible: "true"
+    supports_docker: "true"
+    supports_session_users: "true"
+    supports_web_dev: "true"
+    supports_wso2: "true"
+    type: "training"
+    webinterfaces: "Shell:22:ssh"

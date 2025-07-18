@@ -1,0 +1,30 @@
+# config/hobbyfarm-vmclaim-template.yaml
+# Template for HobbyFarm to create VMRequests
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hybrid-vm-config
+  namespace: default
+data:
+  vm-request-template.yaml: |
+    apiVersion: vm.hobbyfarm.io/v1
+    kind: VMRequest
+    metadata:
+      name: "vm-{{.session}}"
+      namespace: default
+      labels:
+        hobbyfarm.io/session: "{{.session}}"
+        hobbyfarm.io/user: "{{.user}}"
+        hobbyfarm.io/scenario: "{{.scenario}}"
+    spec:
+      user: "{{.user}}"
+      session: "{{.session}}"
+      scenario: "{{.scenario}}"
+      vmTemplate: "hybrid-vm-template"
+      timeout: 600
+      preferStaticVM: true
+      provisioning:
+        playbooks: {{.playbooks | default "base.yaml,dynamic.yaml" | splitList "," | toJson}}
+        packages: {{.packages | default "" | splitList "," | compact | toJson}}
+        requirements: {{.requirements | default "" | splitList "," | compact | toJson}}
+        variables: {{.variables | default "{}" | fromYaml | toJson}}

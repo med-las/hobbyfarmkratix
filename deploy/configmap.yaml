@@ -1,0 +1,40 @@
+# deploy/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hobbyfarm-provisioner-config
+  namespace: default
+  labels:
+    app: hobbyfarm-provisioner
+data:
+  # Static VM pool configuration
+  vm-pool.yaml: |
+    static_vms:
+      - ip: "192.168.2.37"
+        type: "ubuntu-20.04"
+        cpu: 2
+        memory: "4Gi"
+        disk: "20Gi"
+      - ip: "192.168.2.38"
+        type: "ubuntu-20.04"
+        cpu: 2
+        memory: "4Gi"
+        disk: "20Gi"
+    
+    ec2_config:
+      region: "us-east-1"
+      instance_type: "t2.micro"
+      ami: "ami-084568db4383264d4"
+      key_name: "hobbyfarm-keypair"
+      subnet_id: "subnet-09418e7f533840cde"
+      security_group_ids: ["sg-0bfde988b4d5f8110"]
+      
+    provisioner_config:
+      allocation_timeout: "1h"
+      boot_wait_static: "30s"
+      boot_wait_ec2: "2m"
+      ssh_timeout_static: "2m"
+      ssh_timeout_ec2: "5m"
+      ansible_timeout: "90s"
+      ansible_retries: 5
+

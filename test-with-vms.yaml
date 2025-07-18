@@ -1,0 +1,36 @@
+# test-with-vms.yaml - Test when static VMs are available (should use static VM)
+apiVersion: platform.kratix.io/v1alpha1
+kind: VMProvisioningRequest
+metadata:
+  name: test-with-static-vms
+  namespace: default
+  labels:
+    test: "with-static-vms"
+    expected: "static-allocation"
+spec:
+  user: "test-user-static"
+  session: "test-session-static"
+  scenario: "devops-docker-training"
+  vmTemplate: "hybrid-ubuntu-template"
+  timeout: 600  # 10 minutes should be enough for static VM
+  preferStaticVM: true
+
+  provisioning:
+    playbooks:
+      - "base.yaml"
+      - "dynamic.yaml"
+    packages:
+      - "vim"
+      - "htop"
+      - "curl"
+      - "git"
+    requirements: []
+    variables:
+      test_mode: "true"
+      static_test: "true"
+
+  cloudFallback:
+    enabled: true
+    provider: "aws"
+    instanceType: "t3.micro"
+    region: "us-east-1"

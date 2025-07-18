@@ -1,0 +1,64 @@
+# kratix/deployment/kratix-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hobbyfarm-provisioner-kratix
+  labels:
+    app: hobbyfarm-provisioner
+    component: kratix-integration
+rules:
+# Original HobbyFarm permissions
+- apiGroups: ["training.example.com"]
+  resources: ["trainingvms", "trainingvmrequests"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["training.example.com"]
+  resources: ["trainingvms/status", "trainingvmrequests/status"]
+  verbs: ["get", "update", "patch"]
+- apiGroups: ["hobbyfarm.io"]
+  resources: ["sessions", "scenarios", "virtualmachines", "virtualmachineclaims"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: ["hobbyfarm.io"]
+  resources: ["virtualmachines/status"]
+  verbs: ["get", "update", "patch"]
+- apiGroups: [""]
+  resources: ["configmaps", "secrets", "events"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["ec2.aws.upbound.io"]
+  resources: ["instances"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apiextensions.crossplane.io"]
+  resources: ["compositions", "compositeresourcedefinitions"]
+  verbs: ["get", "list", "watch"]
+
+# NEW: Kratix Promise permissions
+- apiGroups: ["platform.kratix.io"]
+  resources: ["promises", "vm-provisioning-requests"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["platform.kratix.io"]
+  resources: ["vm-provisioning-requests/status"]
+  verbs: ["get", "update", "patch"]
+- apiGroups: ["platform.kratix.io"]
+  resources: ["promises/status"]
+  verbs: ["get", "update", "patch"]
+
+# Kratix Pipeline permissions
+- apiGroups: ["platform.kratix.io"]
+  resources: ["pipelines"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hobbyfarm-provisioner-kratix
+  labels:
+    app: hobbyfarm-provisioner
+    component: kratix-integration
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: hobbyfarm-provisioner-kratix
+subjects:
+- kind: ServiceAccount
+  name: hobbyfarm-provisioner
+  namespace: default
