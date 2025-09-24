@@ -197,10 +197,10 @@ ingress:
     enabled: false
 
   hostnames:
-    backend: api.192.168.2.47.nip.io
-    admin: admin.192.168.2.47.nip.io
-    ui: learn.192.168.2.47.nip.io
-    shell: shell.192.168.2.47.nip.io
+    backend: api.192.168.2.59.nip.io
+    admin: admin.192.168.2.59.nip.io
+    ui: learn.192.168.2.59.nip.io
+    shell: shell.192.168.2.59.nip.io
 
 users:
   admin:

@@ -1,4 +1,4 @@
-// internal/hobbyfarm_kratix_integration.go - FINAL FIXED VERSION: No update loop
+// internal/hobbyfarm_kratix_integration.go - Complete updated file with SSH username fixes
 package internal
 
 import (
@@ -6,7 +6,6 @@ import (
     "encoding/json"
     "fmt"
     "log"
-    "strings"
     "time"
 
     metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,14 +17,16 @@ import (
 type HobbyFarmKratixIntegration struct {
     client             dynamic.Interface
     processedSessions  map[string]bool
-    updatedVMs         map[string]bool  // NEW: Track updated VMs to prevent loops
+    updatedVMs         map[string]bool
+    packageDetector    *PackageDetector
 }
 
 func NewHobbyFarmKratixIntegration(client dynamic.Interface) *HobbyFarmKratixIntegration {
     return &HobbyFarmKratixIntegration{
         client:            client,
         processedSessions: make(map[string]bool),
-        updatedVMs:        make(map[string]bool),  // NEW: Initialize updated VMs tracker
+        updatedVMs:        make(map[string]bool),
+        packageDetector:   NewPackageDetector(client),
     }
 }
 
@@ -43,7 +44,7 @@ func (hki *HobbyFarmKratixIntegration) WatchSessionsForKratix() {
         
         // Cleanup processed sessions and updated VMs
         hki.cleanupProcessedSessions()
-        hki.cleanupUpdatedVMs()  // NEW: Cleanup updated VMs tracker
+        hki.cleanupUpdatedVMs()
         
         time.Sleep(10 * time.Second)
     }
@@ -84,7 +85,7 @@ func (hki *HobbyFarmKratixIntegration) processHobbyFarmSessions() {
         
         log.Printf("🎯 NEW HOBBYFARM SESSION: %s → Creating Kratix VMProvisioningRequest", sessionName)
         
-        // Create Kratix VMProvisioningRequest
+        // Create Kratix VMProvisioningRequest with smart package detection
         if err := hki.createKratixVMRequest(sessionName, user, scenario); err != nil {
             log.Printf("❌ Failed to create Kratix VMProvisioningRequest for session %s: %v", sessionName, err)
             continue
@@ -96,10 +97,34 @@ func (hki *HobbyFarmKratixIntegration) processHobbyFarmSessions() {
     }
 }
 
-// Create Kratix VMProvisioningRequest based on HobbyFarm session
+// Create Kratix VMProvisioningRequest based on HobbyFarm session with smart detection
 func (hki *HobbyFarmKratixIntegration) createKratixVMRequest(sessionName, user, scenario string) error {
-    // Get scenario provisioning configuration
-    provisioningConfig := hki.getScenarioProvisioningConfig(scenario)
+    // Use smart package detection instead of manual scenario parsing
+    log.Printf("🧠 Using smart package detection for session: %s", sessionName)
+    
+    config := hki.packageDetector.DetectPackagesFromSession(sessionName)
+    if config == nil {
+        log.Printf("⚠️ Smart detection failed for session %s, using defaults", sessionName)
+        config = &ProvisioningConfig{
+            Playbooks:    []string{"base.yaml", "dynamic.yaml"},
+            Packages:     []string{},
+            Requirements: []string{},
+            Variables:    map[string]string{},
+        }
+    }
+    
+    log.Printf("✅ Smart detection result for session %s:", sessionName)
+    log.Printf("  📦 Packages: %v", config.Packages)
+    log.Printf("  🔧 Variables: %v", config.Variables)
+    log.Printf("  🎭 Playbooks: %v", config.Playbooks)
+    
+    // Convert ProvisioningConfig to map format for Kratix
+    provisioningConfig := map[string]interface{}{
+        "playbooks":    config.Playbooks,
+        "packages":     config.Packages,
+        "requirements": config.Requirements,
+        "variables":    config.Variables,
+    }
     
     // Create VMProvisioningRequest
     kratixRequest := &unstructured.Unstructured{
@@ -147,102 +172,6 @@ func (hki *HobbyFarmKratixIntegration) createKratixVMRequest(sessionName, user, 
     return nil
 }
 
-// Get provisioning configuration from HobbyFarm scenario
-func (hki *HobbyFarmKratixIntegration) getScenarioProvisioningConfig(scenario string) map[string]interface{} {
-    config := map[string]interface{}{
-        "playbooks":    []string{"base.yaml", "dynamic.yaml"},
-        "packages":     []string{},
-        "requirements": []string{},
-        "variables":    map[string]string{},
-    }
-    
-    if scenario == "" {
-        return config
-    }
-    
-    // Try to get scenario from both namespaces
-    namespaces := []string{"hobbyfarm-system", "default"}
-    var scenarioObj *unstructured.Unstructured
-    var err error
-    
-    for _, ns := range namespaces {
-        scenarioObj, err = hki.client.Resource(scenarioGVR).Namespace(ns).Get(
-            context.TODO(), scenario, metav1.GetOptions{})
-        if err == nil {
-            log.Printf("🔍 Found scenario %s in namespace %s", scenario, ns)
-            break
-        }
-    }
-    
-    if err != nil {
-        log.Printf("⚠️ Could not get scenario %s, using defaults", scenario)
-        return config
-    }
-    
-    // Extract provisioning configuration from scenario annotations
-    annotations := scenarioObj.GetAnnotations()
-    if annotations == nil {
-        return config
-    }
-    
-    // Extract playbooks
-    if playbooks, exists := annotations["provisioning.hobbyfarm.io/playbooks"]; exists {
-        playbookList := strings.Split(playbooks, ",")
-        cleanPlaybooks := make([]string, 0, len(playbookList))
-        for _, pb := range playbookList {
-            if trimmed := strings.TrimSpace(pb); trimmed != "" {
-                cleanPlaybooks = append(cleanPlaybooks, trimmed)
-            }
-        }
-        config["playbooks"] = cleanPlaybooks
-    }
-    
-    // Extract packages
-    if packages, exists := annotations["provisioning.hobbyfarm.io/packages"]; exists {
-        packageList := strings.Split(packages, ",")
-        cleanPackages := make([]string, 0, len(packageList))
-        for _, pkg := range packageList {
-            if trimmed := strings.TrimSpace(pkg); trimmed != "" {
-                cleanPackages = append(cleanPackages, trimmed)
-            }
-        }
-        config["packages"] = cleanPackages
-    }
-    
-    // Extract requirements
-    if requirements, exists := annotations["provisioning.hobbyfarm.io/requirements"]; exists {
-        reqList := strings.Split(requirements, ",")
-        cleanReqs := make([]string, 0, len(reqList))
-        for _, req := range reqList {
-            if trimmed := strings.TrimSpace(req); trimmed != "" {
-                cleanReqs = append(cleanReqs, trimmed)
-            }
-        }
-        config["requirements"] = cleanReqs
-    }
-    
-    // Extract variables
-    if variables, exists := annotations["provisioning.hobbyfarm.io/variables"]; exists {
-        varMap := make(map[string]string)
-        lines := strings.Split(variables, "\n")
-        for _, line := range lines {
-            line = strings.TrimSpace(line)
-            if line == "" {
-                continue
-            }
-            parts := strings.SplitN(line, "=", 2)
-            if len(parts) == 2 {
-                key := strings.TrimSpace(parts[0])
-                value := strings.TrimSpace(parts[1])
-                varMap[key] = value
-            }
-        }
-        config["variables"] = varMap
-    }
-    
-    return config
-}
-
 // Update HobbyFarm VirtualMachines with results from Kratix VMProvisioningRequests
 func (hki *HobbyFarmKratixIntegration) updateHobbyFarmVMsFromKratix() {
     // Get all ready Kratix VMProvisioningRequests
@@ -274,7 +203,7 @@ func (hki *HobbyFarmKratixIntegration) updateHobbyFarmVMsFromKratix() {
             continue
         }
         
-        // NEW: Check if we already updated this VM for this session
+        // Check if we already updated this VM for this session
         updateKey := fmt.Sprintf("%s-%s", sessionName, vmIP)
         if hki.updatedVMs[updateKey] {
             continue // Already updated, skip to prevent loop
@@ -286,14 +215,14 @@ func (hki *HobbyFarmKratixIntegration) updateHobbyFarmVMsFromKratix() {
         if err := hki.updateHobbyFarmVirtualMachine(sessionName, user, vmIP); err != nil {
             log.Printf("❌ Failed to update HobbyFarm VirtualMachine for session %s: %v", sessionName, err)
         } else {
-            // NEW: Mark this VM as updated to prevent future update attempts
+            // Mark this VM as updated to prevent future update attempts
             hki.updatedVMs[updateKey] = true
             log.Printf("✅ Marked VM update as complete for session %s", sessionName)
         }
     }
 }
 
-// FINAL FIXED: Update HobbyFarm VirtualMachine with Kratix results
+// Update HobbyFarm VirtualMachine with Kratix results - UPDATED with SSH username fix
 func (hki *HobbyFarmKratixIntegration) updateHobbyFarmVirtualMachine(sessionName, user, vmIP string) error {
     // Check if session still exists
     session, err := hki.client.Resource(sessionGVR).Namespace("hobbyfarm-system").Get(
@@ -317,8 +246,7 @@ func (hki *HobbyFarmKratixIntegration) updateHobbyFarmVirtualMachine(sessionName
         currentStatus, _, _ := unstructured.NestedString(vm.Object, "status", "status")
         currentPublicIP, _, _ := unstructured.NestedString(vm.Object, "status", "public_ip")
         
-        // FIXED: Match by user, and either needs provisioning OR is already ready but with different IP
-        // This prevents the endless loop while still allowing updates when needed
+        // Match by user, and either needs provisioning OR is already ready but with different IP
         if vmUser == sessionUser {
             // Case 1: VM needs initial provisioning
             if currentStatus == "readyforprovisioning" && currentPublicIP == "" {
@@ -335,6 +263,28 @@ func (hki *HobbyFarmKratixIntegration) updateHobbyFarmVirtualMachine(sessionName
             // Case 3: VM is already correctly updated
             if currentStatus == "ready" && currentPublicIP == vmIP {
                 log.Printf("✅ HobbyFarm VirtualMachine %s already correctly updated (status: ready, IP: %s)", vmName, vmIP)
+                
+                // CRITICAL: Check and fix SSH username if wrong
+                currentSSHUser, _, _ := unstructured.NestedString(vm.Object, "spec", "ssh_username")
+                correctSSHUser := getSSHUsername(vmIP)
+                
+                if currentSSHUser != correctSSHUser {
+                    log.Printf("🔧 FIXING SSH username for existing VM %s: %s -> %s (%s VM)", 
+                        vmName, currentSSHUser, correctSSHUser, getVMType(vmIP))
+                    
+                    specUpdate := map[string]interface{}{
+                        "spec": map[string]interface{}{
+                            "ssh_username": correctSSHUser,
+                        },
+                    }
+                    
+                    if err := hki.patchVirtualMachine(vmName, "", specUpdate); err != nil {
+                        log.Printf("❌ Failed to fix SSH username: %v", err)
+                    } else {
+                        log.Printf("✅ FIXED SSH username for %s", vmName)
+                    }
+                }
+                
                 return nil // Already updated correctly, no action needed
             }
         }
@@ -344,7 +294,7 @@ func (hki *HobbyFarmKratixIntegration) updateHobbyFarmVirtualMachine(sessionName
     return nil
 }
 
-// NEW: Perform the actual VM update
+// Perform the actual VM update - UPDATED with SSH username fix
 func (hki *HobbyFarmKratixIntegration) performVMUpdate(vmName string, vm unstructured.Unstructured, vmIP string) error {
     // Get current status and update only necessary fields
     currentStatusObj, exists := vm.Object["status"]
@@ -370,19 +320,24 @@ func (hki *HobbyFarmKratixIntegration) performVMUpdate(vmName string, vm unstruc
         "status": statusMap,
     }
     
-    // Update spec with SSH credentials
+    // CRITICAL: Get correct SSH username based on VM IP type
+    correctSSHUser := getSSHUsername(vmIP)
+    log.Printf("🔧 Using correct SSH username: %s for %s VM (IP: %s)", correctSSHUser, getVMType(vmIP), vmIP)
+    
+    // Update spec with SSH credentials and CORRECT SSH username
     specUpdate := map[string]interface{}{
         "spec": map[string]interface{}{
             "secret_name":  "hobbyfarm-vm-ssh-key",
-            "ssh_username": "kube",
+            "ssh_username": correctSSHUser, // Use utility function for correct username
         },
     }
     
-    // Update ready label
+    // Update ready label with VM type
     labelUpdate := map[string]interface{}{
         "metadata": map[string]interface{}{
             "labels": map[string]interface{}{
-                "ready": "true",
+                "ready":   "true",
+                "vm-type": getVMType(vmIP),
             },
         },
     }
@@ -391,7 +346,7 @@ func (hki *HobbyFarmKratixIntegration) performVMUpdate(vmName string, vm unstruc
     if err := hki.patchVirtualMachine(vmName, "", specUpdate); err != nil {
         log.Printf("⚠️ Failed to update VM spec: %v", err)
     } else {
-        log.Printf("✅ Updated VM spec with SSH credentials")
+        log.Printf("✅ Updated VM spec with correct SSH credentials: ssh_username=%s", correctSSHUser)
     }
     
     if err := hki.patchVirtualMachine(vmName, "status", statusUpdate); err != nil {
@@ -400,7 +355,7 @@ func (hki *HobbyFarmKratixIntegration) performVMUpdate(vmName string, vm unstruc
         wholeUpdate := map[string]interface{}{
             "spec": map[string]interface{}{
                 "secret_name":  "hobbyfarm-vm-ssh-key",
-                "ssh_username": "kube",
+                "ssh_username": correctSSHUser,
             },
             "status": statusMap,
         }
@@ -418,10 +373,11 @@ func (hki *HobbyFarmKratixIntegration) performVMUpdate(vmName string, vm unstruc
     if err := hki.patchVirtualMachine(vmName, "", labelUpdate); err != nil {
         log.Printf("⚠️ Failed to update VM labels: %v", err)
     } else {
-        log.Printf("✅ Updated VM labels: ready=true")
+        log.Printf("✅ Updated VM labels: ready=true, vm-type=%s", getVMType(vmIP))
     }
     
-    log.Printf("✅ Updated HobbyFarm VirtualMachine %s with Kratix result: IP=%s", vmName, vmIP)
+    log.Printf("✅ Updated HobbyFarm VirtualMachine %s with Kratix result: IP=%s, SSH user=%s (%s VM)", 
+        vmName, vmIP, correctSSHUser, getVMType(vmIP))
     return nil
 }
 
@@ -467,7 +423,7 @@ func (hki *HobbyFarmKratixIntegration) cleanupProcessedSessions() {
     }
 }
 
-// NEW: Cleanup updated VMs tracker
+// Cleanup updated VMs tracker
 func (hki *HobbyFarmKratixIntegration) cleanupUpdatedVMs() {
     // Get active VMProvisioningRequests
     activeRequests := make(map[string]bool)
@@ -502,7 +458,6 @@ func (hki *HobbyFarmKratixIntegration) IsSessionProcessed(sessionName string) bo
     return hki.processedSessions[sessionKey]
 }
 
-// NEW: Get updated VMs count
 func (hki *HobbyFarmKratixIntegration) GetUpdatedVMsCount() int {
     return len(hki.updatedVMs)
 }

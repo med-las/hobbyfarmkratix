@@ -23,107 +23,96 @@ var (
     }
 )
 
+// In ec2_fallback.go - replace HandleEC2Fallback function
 func HandleEC2Fallback(client dynamic.Interface, name string) {
-    reqName := "ec2-" + name
+    instanceName := "training-" + name
     
-    // Check if EC2TrainingVM already exists
-    ec2vm, err := client.Resource(ec2TrainingVMGVR).Namespace("default").Get(context.TODO(), reqName, metav1.GetOptions{})
-    if err != nil {
-        log.Printf("🚀 Creating EC2TrainingVM for %s", name)
+    // Check if Instance already exists
+    instanceGVR := schema.GroupVersionResource{
+        Group:    "ec2.aws.upbound.io",
+        Version:  "v1beta1",
+        Resource: "instances",
+    }
+    
+    existingInstance, err := client.Resource(instanceGVR).Get(context.TODO(), instanceName, metav1.GetOptions{})
+    if err == nil {
+        // Instance exists, check its status
+        publicIP, _, _ := unstructured.NestedString(existingInstance.Object, "status", "atProvider", "publicIp")
+        instanceState, _, _ := unstructured.NestedString(existingInstance.Object, "status", "atProvider", "instanceState")
         
-        // Create new EC2TrainingVM
-        newEC2VM := &unstructured.Unstructured{
-            Object: map[string]interface{}{
-                "apiVersion": "training.example.com/v1",
-                "kind":       "EC2TrainingVM",
-                "metadata": map[string]interface{}{
-                    "name":      reqName,
-                    "namespace": "default",
-                    "labels": map[string]interface{}{
-                        "session": name,
-                        "type":    "ec2-fallback",
-                    },
-                },
-                "spec": map[string]interface{}{
-                    "user":         name,
-                    "session":      name,
-                    "instanceType": "t3.micro",
-                    "region":       "us-east-1",
-                },
-            },
-        }
+        log.Printf("✅ Instance %s exists: IP=%s, State=%s", instanceName, publicIP, instanceState)
         
-        _, err = client.Resource(ec2TrainingVMGVR).Namespace("default").Create(context.TODO(), newEC2VM, metav1.CreateOptions{})
-        if err != nil {
-            log.Printf("❌ Failed to create EC2TrainingVM: %v", err)
-        } else {
-            log.Printf("✅ Created EC2TrainingVM %s", reqName)
+        if publicIP != "" && instanceState == "running" {
+            // Update TrainingVM with the IP
+            updateTrainingVMWithEC2(client, name, publicIP, instanceName)
         }
         return
     }
 
-    // Check status of existing EC2TrainingVM
-    vmIP, _, _ := unstructured.NestedString(ec2vm.Object, "status", "vmIP")
-    state, _, _ := unstructured.NestedString(ec2vm.Object, "status", "state")
-    ready, _, _ := unstructured.NestedBool(ec2vm.Object, "status", "ready")
-    instanceId, _, _ := unstructured.NestedString(ec2vm.Object, "status", "instanceId")
-
-    log.Printf("🔍 EC2TrainingVM %s status: state=%s, ip=%s, ready=%v, instanceId=%s", reqName, state, vmIP, ready, instanceId)
-
-    // If VM is ready and has IP, update the TrainingVM
-    if vmIP != "" && (state == "running" || ready) {
-        log.Printf("✅ EC2 VM %s is ready, updating TrainingVM %s", vmIP, name)
-        
-        // Ensure TrainingVM exists before patching
-        _, err := client.Resource(trainingVMGVR).Namespace("default").Get(context.TODO(), name, metav1.GetOptions{})
-        if err != nil {
-            log.Printf("📦 Creating missing TrainingVM for %s before patching", name)
-            newVM := &unstructured.Unstructured{
-                Object: map[string]interface{}{
-                    "apiVersion": "training.example.com/v1",
-                    "kind":       "TrainingVM",
-                    "metadata": map[string]interface{}{
-                        "name":      name,
-                        "namespace": "default",
-                        "labels": map[string]interface{}{
-                            "vm-type": "ec2",
-                        },
-                    },
-                    "spec": map[string]interface{}{
-                        "user":    name,
-                        "session": name,
+    log.Printf("🚀 Creating direct EC2 Instance for %s", name)
+    
+    // Create Instance directly (like your working test)
+    newInstance := &unstructured.Unstructured{
+        Object: map[string]interface{}{
+            "apiVersion": "ec2.aws.upbound.io/v1beta1",
+            "kind":       "Instance",
+            "metadata": map[string]interface{}{
+                "name": instanceName,
+                "labels": map[string]interface{}{
+                    "session": name,
+                    "type":    "training-vm",
+                },
+            },
+            "spec": map[string]interface{}{
+                "forProvider": map[string]interface{}{
+                    "ami":                        "ami-0c02fb55956c7d316",
+                    "instanceType":               "t3.micro",
+                    "region":                     "us-east-1",
+                    "subnetId":                   "subnet-09418e7f533840cde",
+                    "vpcSecurityGroupIds":        []string{"sg-0bfde988b4d5f8110"},
+                    "keyName":                    "hobbyfarm-keypair",
+                    "associatePublicIpAddress":   true,
+                    "tags": map[string]interface{}{
+                        "Name":    "hobbyfarm-training-" + name,
+                        "Session": name,
+                        "Purpose": "training",
                     },
                 },
-            }
-            _, err = client.Resource(trainingVMGVR).Namespace("default").Create(context.TODO(), newVM, metav1.CreateOptions{})
-            if err != nil {
-                log.Printf("❌ Failed to create TrainingVM for %s: %v", name, err)
-                return
-            }
-        }
-
-        // Update TrainingVM with EC2 instance details
-        patch := fmt.Sprintf(`{
-          "status": {
-            "vmIP": "%s",
-            "state": "allocated",
-            "allocatedAt": "%s",
-            "vmType": "ec2",
-            "instanceId": "%s"
-          }
-        }`, vmIP, time.Now().Format(time.RFC3339), instanceId)
-
-        _, err = client.Resource(trainingVMGVR).Namespace("default").Patch(
-            context.TODO(), name, types.MergePatchType,
-            []byte(patch), metav1.PatchOptions{}, "status",
-        )
-        if err == nil {
-            log.Printf("✅ EC2 VM %s assigned to TrainingVM %s", vmIP, name)
-        } else {
-            log.Printf("❌ Failed to patch TrainingVM %s: %v", name, err)
-        }
+                "providerConfigRef": map[string]interface{}{
+                    "name": "default",
+                },
+            },
+        },
+    }
+    
+    _, err = client.Resource(instanceGVR).Create(context.TODO(), newInstance, metav1.CreateOptions{})
+    if err != nil {
+        log.Printf("❌ Failed to create Instance: %v", err)
     } else {
-        log.Printf("⏳ Waiting for EC2 instance for %s (state=%s, ip=%s, ready=%v)", name, state, vmIP, ready)
+        log.Printf("✅ Created direct Instance %s", instanceName)
+    }
+}
+
+func updateTrainingVMWithEC2(client dynamic.Interface, name, vmIP, instanceId string) {
+    // Update TrainingVM with EC2 instance details
+    patch := fmt.Sprintf(`{
+      "status": {
+        "vmIP": "%s",
+        "state": "allocated",
+        "allocatedAt": "%s",
+        "vmType": "ec2",
+        "instanceId": "%s"
+      }
+    }`, vmIP, time.Now().Format(time.RFC3339), instanceId)
+
+    _, err := client.Resource(trainingVMGVR).Namespace("default").Patch(
+        context.TODO(), name, types.MergePatchType,
+        []byte(patch), metav1.PatchOptions{}, "status",
+    )
+    if err != nil {
+        log.Printf("❌ Failed to patch TrainingVM %s: %v", name, err)
+    } else {
+        log.Printf("✅ EC2 Instance %s (%s) assigned to TrainingVM %s", instanceId, vmIP, name)
     }
 }
 

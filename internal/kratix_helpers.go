@@ -281,10 +281,6 @@ func ValidateVMProvisioningRequest(request *unstructured.Unstructured) error {
     return nil
 }
 
-// Get VM type from IP address
-func GetVMTypeFromIP(ip string) string {
-    return getVMType(ip)
-}
 
 // Check if IP is in static VM pool
 func IsStaticVMIP(ip string) bool {

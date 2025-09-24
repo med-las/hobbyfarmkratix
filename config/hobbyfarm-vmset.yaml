@@ -2,7 +2,7 @@ apiVersion: hobbyfarm.io/v1
 kind: VirtualMachineSet
 metadata:
   name: hybrid-vm-set
-  namespace: default
+  namespace: hobbyfarm-system
 spec:
   environment: "hybrid-training-env"
   vm_template: "hybrid-ubuntu-template"

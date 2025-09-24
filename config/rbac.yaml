@@ -9,7 +9,7 @@ metadata:
 
   name: hobbyfarm-provisioner
 
-  namespace: default
+  namespace: hobbyfarm-system
 
   labels:
 
@@ -119,5 +119,5 @@ subjects:
 
   name: hobbyfarm-provisioner
 
-  namespace: default
+  namespace: hobbyfarm-system
 

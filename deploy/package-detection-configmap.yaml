@@ -1,0 +1,55 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: package-detection-rules
+  namespace: default
+  labels:
+    app: hobbyfarm-provisioner
+data:
+  rules.yaml: |
+    package_rules:
+      - keywords: ["devops", "docker", "kubernetes", "k8s", "container"]
+        packages: ["docker.io", "kubectl", "helm"]
+        variables:
+          docker_install: "true"
+          k8s_tools: "true"
+        playbooks: ["base.yaml", "dynamic.yaml"]
+      - keywords: ["web", "node", "javascript", "js", "react", "angular", "vue"]
+        packages: ["nodejs", "npm", "nginx"]
+        variables:
+          node_version: "18"
+          nginx_config: "development"
+        playbooks: ["base.yaml", "dynamic.yaml"]
+      - keywords: ["python", "django", "flask", "fastapi", "py"]
+        packages: ["python3", "python3-pip", "python3-venv", "python3-dev"]
+        variables:
+          python_version: "3"
+        playbooks: ["base.yaml", "dynamic.yaml"]
+      - keywords: ["java", "spring", "maven", "gradle", "jvm"]
+        packages: ["openjdk-11-jdk", "maven"]
+        variables:
+          java_version: "11"
+          java_home: "/usr/lib/jvm/java-11-openjdk-amd64"
+        playbooks: ["base.yaml", "dynamic.yaml"]
+      - keywords: ["wso2", "api", "manager"]
+        packages: ["openjdk-11-jdk"]
+        variables:
+          wso2_version: "4.2.0"
+          wso2_install: "true"
+          java_version: "11"
+        playbooks: ["base.yaml", "dynamic.yaml"]
+      - keywords: ["data", "analytics", "jupyter", "pandas", "numpy"]
+        packages: ["python3", "python3-pip", "jupyter"]
+        variables:
+          python_version: "3"
+          jupyter_install: "true"
+        playbooks: ["base.yaml", "dynamic.yaml"]
+      - keywords: ["go", "golang", "gin", "fiber"]
+        packages: ["golang-go", "build-essential"]
+        variables:
+          go_version: "1.19"
+        playbooks: ["base.yaml", "dynamic.yaml"]
+    default_config:
+      packages: []
+      variables: {}
+      playbooks: ["base.yaml", "dynamic.yaml"]

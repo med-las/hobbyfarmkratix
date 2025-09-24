@@ -1,4 +1,4 @@
-// internal/kratix_controller.go - Kratix Promise integration controller
+// internal/kratix_controller.go - COMPLETE VERSION with smart package detection
 package internal
 
 import (
@@ -31,6 +31,7 @@ type KratixController struct {
     processedRequests       map[string]bool
     staticVMPool           []string
     usedIPs                map[string]bool
+    packageDetector        *PackageDetector
 }
 
 func NewKratixController(client dynamic.Interface) *KratixController {
@@ -40,6 +41,7 @@ func NewKratixController(client dynamic.Interface) *KratixController {
         processedRequests: make(map[string]bool),
         staticVMPool:      []string{"192.168.2.37", "192.168.2.38"},
         usedIPs:          make(map[string]bool),
+        packageDetector:   NewPackageDetector(client),
     }
 }
 
@@ -214,7 +216,7 @@ func (kc *KratixController) updateVMStatus() {
             continue
         }
         
-        // Run provisioning
+        // Run provisioning with smart package detection
         if err := kc.runProvisioning(vmIP, session, scenario, &request); err != nil {
             log.Printf("❌ Provisioning failed for VM %s: %v", vmIP, err)
             kc.updateRequestStatus(requestName, "failed", vmIP, "", false)
@@ -229,28 +231,23 @@ func (kc *KratixController) updateVMStatus() {
     }
 }
 
-// Run Ansible provisioning based on request configuration
+// Run Ansible provisioning based on request configuration with smart detection
 func (kc *KratixController) runProvisioning(vmIP, session, scenario string, request *unstructured.Unstructured) error {
-    // Get provisioning config from request
-    playbooks, _, _ := unstructured.NestedStringSlice(request.Object, "spec", "provisioning", "playbooks")
-    packages, _, _ := unstructured.NestedStringSlice(request.Object, "spec", "provisioning", "packages")
-    requirements, _, _ := unstructured.NestedStringSlice(request.Object, "spec", "provisioning", "requirements")
-    variables, _, _ := unstructured.NestedStringMap(request.Object, "spec", "provisioning", "variables")
+    // Use smart package detection instead of manual config extraction
+    log.Printf("🧠 Using smart package detection for Kratix provisioning (session: %s)", session)
     
-    // Default playbooks if not specified
-    if len(playbooks) == 0 {
-        playbooks = []string{"base.yaml", "dynamic.yaml"}
+    config := kc.packageDetector.DetectPackagesFromSession(session)
+    if config == nil {
+        log.Printf("⚠️ Smart detection failed, using default config")
+        config = &ProvisioningConfig{
+            Playbooks:    []string{"base.yaml", "dynamic.yaml"},
+            Packages:     []string{},
+            Requirements: []string{},
+            Variables:    map[string]string{},
+        }
     }
     
-    log.Printf("🎯 Provisioning config: playbooks=%v, packages=%v, requirements=%v", playbooks, packages, requirements)
-    
-    // Create provisioning config
-    config := &ProvisioningConfig{
-        Playbooks:    playbooks,
-        Packages:     packages,
-        Requirements: requirements,
-        Variables:    variables,
-    }
+    log.Printf("🎯 Smart detection result for Kratix: playbooks=%v, packages=%v", config.Playbooks, config.Packages)
     
     // Detect SSH user
     sshUser, err := kc.ansibleRunner.detectSSHUser(vmIP)
@@ -364,68 +361,71 @@ func (kc *KratixController) setReadyAt(requestName string) {
 }
 
 func (kc *KratixController) handleCloudFallback(requestName string, request *unstructured.Unstructured) error {
-    // Extract cloud config
-    provider, _, _ := unstructured.NestedString(request.Object, "spec", "cloudFallback", "provider")
-    instanceType, _, _ := unstructured.NestedString(request.Object, "spec", "cloudFallback", "instanceType")
-    region, _, _ := unstructured.NestedString(request.Object, "spec", "cloudFallback", "region")
-    
-    // Default values
-    if provider == "" {
-        provider = "aws"
-    }
-    if instanceType == "" {
-        instanceType = "t3.micro"
-    }
-    if region == "" {
-        region = "us-east-1"
-    }
-    
-    log.Printf("🚀 Creating cloud instance: provider=%s, type=%s, region=%s", provider, instanceType, region)
-    
-    // Create cloud instance (reuse existing EC2 fallback logic)
-    user, _, _ := unstructured.NestedString(request.Object, "spec", "user")
     session, _, _ := unstructured.NestedString(request.Object, "spec", "session")
     
-    // Create EC2TrainingVM for cloud fallback
-    return kc.createCloudInstance(requestName, user, session, provider, instanceType, region)
-}
+    log.Printf("🚀 Creating direct Instance for request %s", requestName)
 
-func (kc *KratixController) createCloudInstance(requestName, user, session, provider, instanceType, region string) error {
-    // For now, only support AWS via existing EC2 fallback
-    if provider != "aws" {
-        return fmt.Errorf("unsupported cloud provider: %s", provider)
+    // Create Instance directly (not XEC2TrainingVM)
+    instanceName := "training-" + session
+    instanceGVR := schema.GroupVersionResource{
+        Group:    "ec2.aws.upbound.io",
+        Version:  "v1beta1",
+        Resource: "instances",
     }
     
-    // Create EC2TrainingVM
-    reqName := "kratix-" + requestName
-    newEC2VM := &unstructured.Unstructured{
+    // Check if Instance already exists
+    existingInstance, err := kc.client.Resource(instanceGVR).Get(context.TODO(), instanceName, metav1.GetOptions{})
+    if err == nil {
+        publicIP, _, _ := unstructured.NestedString(existingInstance.Object, "status", "atProvider", "publicIp")
+        instanceState, _, _ := unstructured.NestedString(existingInstance.Object, "status", "atProvider", "instanceState")
+        
+        if publicIP != "" && instanceState == "running" {
+            log.Printf("✅ Instance %s ready: IP=%s", instanceName, publicIP)
+            kc.updateRequestStatus(requestName, "allocated", publicIP, "ec2", false)
+            return nil
+        }
+        return nil // Still starting
+    }
+    
+    // Create new Instance directly
+    newInstance := &unstructured.Unstructured{
         Object: map[string]interface{}{
-            "apiVersion": "training.example.com/v1",
-            "kind":       "EC2TrainingVM",
+            "apiVersion": "ec2.aws.upbound.io/v1beta1",
+            "kind":       "Instance",
             "metadata": map[string]interface{}{
-                "name":      reqName,
-                "namespace": "default",
+                "name": instanceName,
                 "labels": map[string]interface{}{
                     "kratix-request": requestName,
                     "session":        session,
-                    "type":           "kratix-cloud-fallback",
                 },
             },
             "spec": map[string]interface{}{
-                "user":         user,
-                "session":      session,
-                "instanceType": instanceType,
-                "region":       region,
+                "forProvider": map[string]interface{}{
+                    "ami":                        "ami-0360c520857e3138f",
+                    "instanceType":               "t3.micro",
+                    "region":                     "us-east-1",
+                    "subnetId":                   "subnet-09418e7f533840cde",
+                    "vpcSecurityGroupIds":        []string{"sg-0bfde988b4d5f8110"},
+                    "keyName":                    "my-hobbyfarm-key",
+                    "associatePublicIpAddress":   true,
+                    "tags": map[string]interface{}{
+                        "Name":    "hobbyfarm-" + session,
+                        "Session": session,
+                    },
+                },
+                "providerConfigRef": map[string]interface{}{
+                    "name": "default",
+                },
             },
         },
     }
     
-    _, err := kc.client.Resource(ec2TrainingVMGVR).Namespace("default").Create(context.TODO(), newEC2VM, metav1.CreateOptions{})
+    _, err = kc.client.Resource(instanceGVR).Create(context.TODO(), newInstance, metav1.CreateOptions{})
     if err != nil {
-        return fmt.Errorf("failed to create EC2TrainingVM: %v", err)
+        return fmt.Errorf("failed to create Instance: %v", err)
     }
     
-    log.Printf("✅ Created EC2TrainingVM %s for Kratix request %s", reqName, requestName)
+    log.Printf("✅ Created direct Instance %s", instanceName)
     return nil
 }
 

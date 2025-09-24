@@ -1,4 +1,4 @@
-# ansible/playbooks/dynamic.yaml - MODIFIED VERSION: Use existing user instead of creating session users
+# ansible/playbooks/dynamic.yaml - COMPLETE VERSION with SSH compatibility fix
 ---
 - name: Dynamic Session Provisioning with Existing User
   hosts: target
@@ -35,6 +35,39 @@
           - "Session name: {{ session_name }}"
           - "Session packages: {{ session_packages | default('none') }}"
           - "Session requirements: {{ session_requirements | default('none') }}"
+
+    # CRITICAL FIX: Configure SSH for gargantua-shell compatibility on EC2 instances
+    - name: Configure SSH for gargantua-shell compatibility on EC2 instances
+      block:
+        - name: Detect if this is an EC2 instance
+          set_fact:
+            is_ec2_instance: "{{ ansible_default_ipv4.address | ipaddr('public') | bool }}"
+        
+        - name: Add SSH algorithm restrictions for Go SSH client compatibility
+          lineinfile:
+            path: /etc/ssh/sshd_config
+            line: "{{ item }}"
+            create: yes
+            backup: yes
+          loop:
+            - ""
+            - "# Go SSH client compatibility for gargantua-shell"
+            - "KexAlgorithms diffie-hellman-group14-sha256,ecdh-sha2-nistp256"
+            - "Ciphers aes128-ctr,aes256-ctr"  
+            - "MACs hmac-sha2-256"
+          when: is_ec2_instance | bool
+          notify: restart ssh
+
+        - name: Restart SSH service for EC2 instances
+          systemd:
+            name: ssh
+            state: restarted
+          when: is_ec2_instance | bool
+      
+      rescue:
+        - name: Log SSH configuration failure
+          debug:
+            msg: "Failed to configure SSH compatibility, continuing anyway"
 
     # FIXED: Create docker group first if it doesn't exist
     - name: Ensure docker group exists
@@ -256,47 +289,53 @@
           User Home: {{ session_user_home }}
           Provisioned: {{ ansible_date_time.iso8601 }}
 
-          🔐 SSH Access:
+          SSH Access:
           ssh {{ session_user }}@{{ ansible_default_ipv4.address }}
 
-          📁 Session Workspace:
+          Session Workspace:
           {{ session_user_home }}/workspace/{{ session_name }}/
 
-          📁 User Home:
+          User Home:
           {{ session_user_home }}
 
-          📦 Installed Packages:
+          Installed Packages:
           {% if session_packages is defined %}
           {{ session_packages.replace(',', ', ') }}
           {% else %}
           Base packages only
           {% endif %}
 
-          🐍 Python Requirements:
+          Python Requirements:
           {% if session_requirements is defined %}
           {{ session_requirements.replace(',', ', ') }}
           {% else %}
           None specified
           {% endif %}
 
-          🛠️ Special Tools:
+          Special Tools:
           Docker: {{ 'Installed' if (session_packages is defined and ('docker.io' in session_packages or 'docker' in session_packages)) else 'Not installed' }}
           Kubectl: {{ 'Installed' if (session_packages is defined and 'kubectl' in session_packages) else 'Not installed' }}
           Helm: {{ 'Installed' if (session_packages is defined and 'helm' in session_packages) else 'Not installed' }}
           Java: {{ 'Installed' if (session_packages is defined and ('java' in session_packages or 'openjdk' in session_packages)) else 'Not installed' }}
           WSO2: {{ 'Installed' if (wso2_install is defined and wso2_install | bool) else 'Not installed' }}
 
-          💻 System Information:
+          System Information:
           OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
           Architecture: {{ ansible_architecture }}
           Memory: {{ ansible_memtotal_mb }}MB
+          Instance Type: {{ 'EC2' if is_ec2_instance | default(false) else 'Local VM' }}
 
-          🧹 Session Cleanup:
+          Session Cleanup:
           To clean up this session workspace:
           rm -rf {{ session_user_home }}/workspace/{{ session_name }}
 
           Note: This session uses the existing user {{ session_user }}.
           No user cleanup is needed - just workspace cleanup.
+
+          {% if is_ec2_instance | default(false) %}
+          SSH Compatibility:
+          SSH server configured for gargantua-shell Go SSH client compatibility.
+          {% endif %}
 
         dest: "{{ session_user_home }}/workspace/{{ session_name }}/session-info.txt"
         owner: "{{ session_user }}"
@@ -306,8 +345,16 @@
     - name: Display session completion message
       debug:
         msg:
-          - "✅ Session setup complete for existing user: {{ session_user }}"
-          - "📛 Session name: {{ session_name }}"
-          - "🔐 SSH access: ssh {{ session_user }}@{{ ansible_default_ipv4.address }}"
-          - "📁 Session workspace: {{ session_user_home }}/workspace/{{ session_name }}/"
-          - "🧹 Cleanup: rm -rf {{ session_user_home }}/workspace/{{ session_name }}"
+          - "Session setup complete for existing user: {{ session_user }}"
+          - "Session name: {{ session_name }}"
+          - "SSH access: ssh {{ session_user }}@{{ ansible_default_ipv4.address }}"
+          - "Session workspace: {{ session_user_home }}/workspace/{{ session_name }}/"
+          - "Cleanup: rm -rf {{ session_user_home }}/workspace/{{ session_name }}"
+          - "Instance type: {{ 'EC2' if is_ec2_instance | default(false) else 'Local VM' }}"
+          - "SSH configured: {{ 'Yes (Go SSH compatibility)' if is_ec2_instance | default(false) else 'Standard' }}"
+
+  handlers:
+    - name: restart ssh
+      systemd:
+        name: ssh
+        state: restarted

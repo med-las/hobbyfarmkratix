@@ -4,14 +4,14 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: hybrid-vm-config
-  namespace: default
+  namespace: hobbyfarm-system
 data:
   vm-request-template.yaml: |
     apiVersion: vm.hobbyfarm.io/v1
     kind: VMRequest
     metadata:
       name: "vm-{{.session}}"
-      namespace: default
+      namespace: hobbyfarm-system
       labels:
         hobbyfarm.io/session: "{{.session}}"
         hobbyfarm.io/user: "{{.user}}"

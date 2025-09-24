@@ -1,18 +1,21 @@
 # config/hobbyfarm-webhook.yaml
 # Webhook configuration to intercept VM creation
 apiVersion: admissionregistration.k8s.io/v1
-kind: MutatingAdmissionWebhook
+kind: MutatingWebhookConfiguration
 metadata:
   name: hobbyfarm-vm-provisioner-webhook
-spec:
+webhooks:
+- name: vm-provisioner.hobbyfarm.io
   clientConfig:
     service:
-      name: hobbyfarm-vm-provisioner-webhook
-      namespace: default
+      name: hobbyfarm-provisioner-webhook
+      namespace: hobbyfarm-system
       path: "/mutate"
   rules:
-    - operations: ["CREATE"]
-      apiGroups: ["hobbyfarm.io"]
-      apiVersions: ["v1"]
-      resources: ["virtualmachineclaims"]
+  - operations: ["CREATE"]
+    apiGroups: ["hobbyfarm.io"]
+    apiVersions: ["v1"]
+    resources: ["virtualmachineclaims"]
   admissionReviewVersions: ["v1", "v1beta1"]
+  sideEffects: None
+  failurePolicy: Fail

@@ -1,4 +1,4 @@
-// internal/hobbyfarm_controller.go - COMPLETE VERSION with SSH credentials fix
+// internal/hobbyfarm_controller.go - Complete updated file with SSH username fixes
 package internal
 
 import (
@@ -56,6 +56,13 @@ func (hfc *HobbyFarmController) WatchHobbyFarmVMs() {
     log.Println("🎯 STATUS: Updating HobbyFarm VirtualMachine status")
     log.Println("🚫 DISABLED: Dual session creation prevention active")
     
+    // Run SSH username fix on startup
+    log.Println("🔧 Running SSH username validation on startup...")
+    hfc.FixExistingSSHUsernames()
+    
+    // Start periodic SSH fix routine
+    go hfc.startPeriodicSSHFix()
+    
     for {
         // PRIMARY: Watch for new Sessions (what triggers everything)
         hfc.watchSessions()
@@ -64,6 +71,107 @@ func (hfc *HobbyFarmController) WatchHobbyFarmVMs() {
         hfc.updateHobbyFarmVMStatus()
         
         time.Sleep(10 * time.Second)
+    }
+}
+
+// Start periodic SSH username fix
+func (hfc *HobbyFarmController) startPeriodicSSHFix() {
+    ticker := time.NewTicker(5 * time.Minute) // Check every 5 minutes
+    defer ticker.Stop()
+    
+    for range ticker.C {
+        hfc.FixExistingSSHUsernames()
+    }
+}
+
+// FixExistingSSHUsernames scans all VirtualMachines and fixes wrong SSH usernames
+func (hfc *HobbyFarmController) FixExistingSSHUsernames() {
+    log.Println("🔧 Scanning for VirtualMachines with incorrect SSH usernames...")
+    
+    virtualMachines, err := hfc.client.Resource(virtualMachineGVR).Namespace("hobbyfarm-system").List(context.TODO(), metav1.ListOptions{})
+    if err != nil {
+        log.Printf("❌ Failed to list VirtualMachines: %v", err)
+        return
+    }
+    
+    fixedCount := 0
+    checkedCount := 0
+    
+    for _, vm := range virtualMachines.Items {
+        vmName := vm.GetName()
+        vmIP, _, _ := unstructured.NestedString(vm.Object, "status", "public_ip")
+        currentSSHUser, _, _ := unstructured.NestedString(vm.Object, "spec", "ssh_username")
+        status, _, _ := unstructured.NestedString(vm.Object, "status", "status")
+        
+        // Skip VMs without IP or not ready
+        if vmIP == "" || status != "ready" {
+            continue
+        }
+        
+        checkedCount++
+        
+        // Use the utility function to get correct SSH username
+        correctSSHUser := getSSHUsername(vmIP)
+        
+        // Fix if SSH username is wrong
+        if currentSSHUser != correctSSHUser {
+            log.Printf("🔧 FIXING %s: VM %s has ssh_username=%s but needs %s for IP %s", 
+                getVMType(vmIP), vmName, currentSSHUser, correctSSHUser, vmIP)
+            
+            // Update SSH username
+            specUpdate := map[string]interface{}{
+                "spec": map[string]interface{}{
+                    "ssh_username": correctSSHUser,
+                },
+            }
+            
+            // Also update the vm-type label for tracking
+            labelUpdate := map[string]interface{}{
+                "metadata": map[string]interface{}{
+                    "labels": map[string]interface{}{
+                        "vm-type": getVMType(vmIP),
+                    },
+                },
+            }
+            
+            // Apply spec update
+            specBytes, err := json.Marshal(specUpdate)
+            if err != nil {
+                log.Printf("❌ Failed to marshal spec update for %s: %v", vmName, err)
+                continue
+            }
+            
+            _, err = hfc.client.Resource(virtualMachineGVR).Namespace("hobbyfarm-system").Patch(
+                context.TODO(), vmName, types.MergePatchType,
+                specBytes, metav1.PatchOptions{},
+            )
+            
+            if err != nil {
+                log.Printf("❌ Failed to update SSH username for %s: %v", vmName, err)
+                continue
+            }
+            
+            // Apply label update
+            labelBytes, err := json.Marshal(labelUpdate)
+            if err == nil {
+                hfc.client.Resource(virtualMachineGVR).Namespace("hobbyfarm-system").Patch(
+                    context.TODO(), vmName, types.MergePatchType,
+                    labelBytes, metav1.PatchOptions{},
+                )
+            }
+            
+            log.Printf("✅ FIXED SSH username for %s: %s -> %s (%s VM)", 
+                vmName, currentSSHUser, correctSSHUser, getVMType(vmIP))
+            fixedCount++
+        }
+    }
+    
+    if fixedCount > 0 {
+        log.Printf("🎉 Fixed SSH usernames for %d out of %d VirtualMachines", fixedCount, checkedCount)
+    } else if checkedCount > 0 {
+        log.Printf("✅ All %d VirtualMachines have correct SSH usernames", checkedCount)
+    } else {
+        log.Printf("ℹ️ No ready VirtualMachines found to check")
     }
 }
 
@@ -164,7 +272,7 @@ func (hfc *HobbyFarmController) updateHobbyFarmVMStatus() {
     }
 }
 
-// Update the corresponding HobbyFarm VirtualMachine - ENHANCED with SSH credentials
+// FIXED: Update the corresponding HobbyFarm VirtualMachine with correct SSH username detection
 func (hfc *HobbyFarmController) updateCorrespondingVirtualMachine(sessionName, vmIP string) error {
     // Get the session to extract user information
     session, err := hfc.client.Resource(sessionGVR).Namespace("hobbyfarm-system").Get(
@@ -176,6 +284,10 @@ func (hfc *HobbyFarmController) updateCorrespondingVirtualMachine(sessionName, v
     
     sessionUser, _, _ := unstructured.NestedString(session.Object, "spec", "user")
     log.Printf("🔍 Looking for VirtualMachine for session %s (user: %s)", sessionName, sessionUser)
+    
+    // CRITICAL: Determine SSH username based on VM IP type FIRST using utility function
+    sshUsername := getSSHUsername(vmIP)
+    log.Printf("🔧 Auto-detected SSH username: %s for %s VM (IP: %s)", sshUsername, getVMType(vmIP), vmIP)
     
     // Try to find VirtualMachine that matches this session's user
     virtualMachines, err := hfc.client.Resource(virtualMachineGVR).Namespace("hobbyfarm-system").List(context.TODO(), metav1.ListOptions{})
@@ -197,34 +309,35 @@ func (hfc *HobbyFarmController) updateCorrespondingVirtualMachine(sessionName, v
         if vmUser == sessionUser && currentStatus == "readyforprovisioning" && currentPublicIP == "" {
             log.Printf("🎯 Found matching VirtualMachine %s for session %s (user: %s)", vmName, sessionName, sessionUser)
             
-            log.Printf("🔄 Updating VirtualMachine %s with IP %s", vmName, vmIP)
+            log.Printf("🔄 Updating VirtualMachine %s with IP %s and SSH user %s", vmName, vmIP, sshUsername)
             
-            // ENHANCED: Update status with proper ws_endpoint
+            // Use IP address as hostname so gargantua-shell connects directly
             statusUpdate := map[string]interface{}{
                 "status":      "ready",
                 "public_ip":   vmIP,
                 "private_ip":  vmIP,
-                "hostname":    vmIP,
+                "hostname":    vmIP, // Use IP not vmName for direct connection
                 "allocated":   true,
-                "ws_endpoint": "ws://shell.192.168.2.47.nip.io", // Force ws:// not wss://
+                "ws_endpoint": "ws://shell.192.168.2.59.nip.io",
             }
             
-            // ENHANCED: Update spec with SSH credentials
+            // CRITICAL: Update spec with CORRECT SSH username determined by IP type
             specUpdate := map[string]interface{}{
                 "secret_name":  "hobbyfarm-vm-ssh-key",
-                "ssh_username": "kube",
+                "ssh_username": sshUsername, // This is now correctly determined by IP type
             }
             
-            // Update ready label to true
+            // Update ready label to true with VM type
             labelUpdate := map[string]interface{}{
                 "metadata": map[string]interface{}{
                     "labels": map[string]interface{}{
-                        "ready": "true",
+                        "ready":   "true",
+                        "vm-type": getVMType(vmIP),
                     },
                 },
             }
             
-            // 1. Update spec with SSH credentials
+            // 1. Update spec with SSH credentials - FORCE the correct username
             specBytes, err := json.Marshal(map[string]interface{}{"spec": specUpdate})
             if err == nil {
                 _, err = hfc.client.Resource(virtualMachineGVR).Namespace("hobbyfarm-system").Patch(
@@ -232,9 +345,9 @@ func (hfc *HobbyFarmController) updateCorrespondingVirtualMachine(sessionName, v
                     specBytes, metav1.PatchOptions{},
                 )
                 if err != nil {
-                    log.Printf("⚠️ Failed to update VM spec with SSH credentials: %v", err)
+                    log.Printf("❌ Failed to update VM spec with SSH credentials: %v", err)
                 } else {
-                    log.Printf("✅ Updated VM spec with SSH credentials")
+                    log.Printf("✅ Successfully updated VM spec: ssh_username=%s for %s VM", sshUsername, getVMType(vmIP))
                 }
             }
             
@@ -266,7 +379,42 @@ func (hfc *HobbyFarmController) updateCorrespondingVirtualMachine(sessionName, v
                 return fmt.Errorf("failed to update labels: %v", err)
             }
             
-            log.Printf("✅ Updated HobbyFarm VirtualMachine %s: status=ready, IP=%s, SSH configured", vmName, vmIP)
+            log.Printf("✅ Updated HobbyFarm VirtualMachine %s: hostname=%s, ssh_username=%s (%s VM)", 
+                vmName, vmIP, sshUsername, getVMType(vmIP))
+            log.Printf("🔑 Gargantua-shell will now SSH to %s as user %s", vmIP, sshUsername)
+            return nil
+        }
+        
+        // ALSO handle the case where VM is already assigned but has wrong SSH username
+        // This fixes existing VMs that were created with wrong username
+        if vmUser == sessionUser && currentStatus == "ready" && currentPublicIP == vmIP {
+            currentSSHUser, _, _ := unstructured.NestedString(vm.Object, "spec", "ssh_username")
+            
+            // If SSH username is wrong for this IP type, fix it
+            if currentSSHUser != sshUsername {
+                log.Printf("🔧 FIXING wrong SSH username: VM %s has %s but needs %s for %s VM", 
+                    vmName, currentSSHUser, sshUsername, getVMType(vmIP))
+                
+                // Update with correct SSH username
+                specUpdateFix := map[string]interface{}{
+                    "spec": map[string]interface{}{
+                        "ssh_username": sshUsername,
+                    },
+                }
+                
+                specBytes, err := json.Marshal(specUpdateFix)
+                if err == nil {
+                    _, err = hfc.client.Resource(virtualMachineGVR).Namespace("hobbyfarm-system").Patch(
+                        context.TODO(), vmName, types.MergePatchType,
+                        specBytes, metav1.PatchOptions{},
+                    )
+                    if err != nil {
+                        log.Printf("❌ Failed to fix SSH username: %v", err)
+                    } else {
+                        log.Printf("✅ FIXED SSH username for %s: %s -> %s", vmName, currentSSHUser, sshUsername)
+                    }
+                }
+            }
             return nil
         }
     }

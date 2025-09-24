@@ -6,7 +6,7 @@ metadata:
   namespace: hobbyfarm-system
 spec:
   display_name: "Training Environment"
-  dnssuffix: "192.168.2.47.nip.io"
+  dnssuffix: "192.168.2.59.nip.io"
   provider: "hybrid-provisioner"
   count_capacity:
     training-vm-template: 10
@@ -32,4 +32,4 @@ spec:
     bootWaitEC2: "120s"
     bootWaitStatic: "30s"
     maxRetries: "3"
-  ws_endpoint: "wss://shell.192.168.2.47.nip.io"
+  ws_endpoint: "wss://shell.192.168.2.59.nip.io"

@@ -1,0 +1,9 @@
+# Install the function-auto-ready function which can handle basic resource composition
+cat << 'EOF' | kubectl apply -f -
+apiVersion: pkg.crossplane.io/v1
+kind: Function
+metadata:
+  name: function-auto-ready
+spec:
+  package: xpkg.upbound.io/crossplane-contrib/function-auto-ready:v0.2.1
+EOF

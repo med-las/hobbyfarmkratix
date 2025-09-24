@@ -1,4 +1,4 @@
-// cmd/main.go - UPDATED VERSION: Added Kratix Promise integration alongside HobbyFarm
+// cmd/main.go - Complete updated file with SSH username fix integration
 package main
 
 import (
@@ -9,15 +9,18 @@ import (
     "os/signal"
     "syscall"
     "strings"
+    "encoding/json"
     "hobbyfarm-vm-provisioner/internal"
     
     metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
     "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+    "k8s.io/apimachinery/pkg/types"
     "k8s.io/client-go/dynamic"
 )
 
 func main() {
-    log.Println("🎓 Starting HobbyFarm Hybrid VM Provisioner with Kratix Integration v3.0...")
+    log.Println("🎓 Starting HobbyFarm Hybrid VM Provisioner with Kratix Integration v3.1...")
+    log.Println("🔧 Enhanced with automatic SSH username detection and fixing")
     
     // Initialize Kubernetes client
     client := internal.InitKubeClient()
@@ -49,6 +52,13 @@ func main() {
             }
         }()
     }
+    
+    // Run initial SSH username fix across all VMs
+    log.Println("🔧 Running startup SSH username validation...")
+    runGlobalSSHUsernameFix(client)
+    
+    // Start periodic global SSH username fix
+    go startPeriodicGlobalSSHFix(ctx, client)
     
     // Determine integration mode
     integrationMode := os.Getenv("INTEGRATION_MODE")
@@ -92,6 +102,115 @@ func main() {
     // Give goroutines time to cleanup
     time.Sleep(2 * time.Second)
     log.Println("✅ HobbyFarm Provisioner stopped gracefully")
+}
+
+// Global SSH username fix that works across all VMs
+func runGlobalSSHUsernameFix(client dynamic.Interface) {
+    log.Println("🔧 Running global SSH username validation...")
+    
+    // Get all VirtualMachines in hobbyfarm-system namespace
+    virtualMachines, err := client.Resource(internal.GetVirtualMachineGVR()).Namespace("hobbyfarm-system").List(context.TODO(), metav1.ListOptions{})
+    if err != nil {
+        log.Printf("❌ Failed to list VirtualMachines: %v", err)
+        return
+    }
+    
+    fixedCount := 0
+    checkedCount := 0
+    
+    for _, vm := range virtualMachines.Items {
+        vmName := vm.GetName()
+        vmIP, _, _ := unstructured.NestedString(vm.Object, "status", "public_ip")
+        currentSSHUser, _, _ := unstructured.NestedString(vm.Object, "spec", "ssh_username")
+        status, _, _ := unstructured.NestedString(vm.Object, "status", "status")
+        
+        // Skip VMs without IP or not ready
+        if vmIP == "" || status != "ready" {
+            continue
+        }
+        
+        checkedCount++
+        
+        // Use the utility function to get correct SSH username
+        correctSSHUser := internal.GetSSHUsername(vmIP)
+        
+        // Fix if SSH username is wrong
+        if currentSSHUser != correctSSHUser {
+            log.Printf("🔧 GLOBAL FIX: VM %s has ssh_username=%s but needs %s for %s VM (IP: %s)", 
+                vmName, currentSSHUser, correctSSHUser, internal.GetVMTypeFromIP(vmIP), vmIP)
+            
+            // Patch the VirtualMachine
+            patch := map[string]interface{}{
+                "spec": map[string]interface{}{
+                    "ssh_username": correctSSHUser,
+                },
+                "metadata": map[string]interface{}{
+                    "labels": map[string]interface{}{
+                        "vm-type": internal.GetVMTypeFromIP(vmIP),
+                        "ssh-username-fixed": "true",
+                    },
+                },
+            }
+            
+            patchBytes, err := json.Marshal(patch)
+            if err != nil {
+                log.Printf("❌ Failed to marshal patch for %s: %v", vmName, err)
+                continue
+            }
+            
+            _, err = client.Resource(internal.GetVirtualMachineGVR()).Namespace("hobbyfarm-system").Patch(
+                context.TODO(), vmName, types.MergePatchType,
+                patchBytes, metav1.PatchOptions{},
+            )
+            
+            if err != nil {
+                log.Printf("❌ Failed to patch SSH username for %s: %v", vmName, err)
+            } else {
+                log.Printf("✅ GLOBAL FIX: Fixed SSH username for %s: %s -> %s (%s VM)", 
+                    vmName, currentSSHUser, correctSSHUser, internal.GetVMTypeFromIP(vmIP))
+                fixedCount++
+            }
+        } else {
+            // Add vm-type label even if SSH username is correct
+            labelPatch := map[string]interface{}{
+                "metadata": map[string]interface{}{
+                    "labels": map[string]interface{}{
+                        "vm-type": internal.GetVMTypeFromIP(vmIP),
+                    },
+                },
+            }
+            
+            labelBytes, _ := json.Marshal(labelPatch)
+            client.Resource(internal.GetVirtualMachineGVR()).Namespace("hobbyfarm-system").Patch(
+                context.TODO(), vmName, types.MergePatchType,
+                labelBytes, metav1.PatchOptions{},
+            )
+        }
+    }
+    
+    if fixedCount > 0 {
+        log.Printf("🎉 Global SSH fix completed: Fixed %d out of %d VirtualMachines", fixedCount, checkedCount)
+    } else if checkedCount > 0 {
+        log.Printf("✅ Global SSH check: All %d VirtualMachines have correct SSH usernames", checkedCount)
+    } else {
+        log.Printf("ℹ️ No ready VirtualMachines found to check")
+    }
+}
+
+// Start periodic global SSH username fix
+func startPeriodicGlobalSSHFix(ctx context.Context, client dynamic.Interface) {
+    ticker := time.NewTicker(10 * time.Minute) // Check every 10 minutes
+    defer ticker.Stop()
+    
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case <-ticker.C:
+            log.Println("🔧 Running periodic global SSH username check...")
+            runGlobalSSHUsernameFix(client)
+        }
+    }
 }
 
 // HobbyFarm-only mode
@@ -525,7 +644,11 @@ func discoverVirtualMachines(client dynamic.Interface) int {
             user, _, _ := unstructured.NestedString(vm.Object, "spec", "user")
             status, _, _ := unstructured.NestedString(vm.Object, "status", "status")
             publicIP, _, _ := unstructured.NestedString(vm.Object, "status", "public_ip")
-            log.Printf("  📋 VirtualMachine: %s, User: %s, Status: %s, IP: %s", vm.GetName(), user, status, publicIP)
+            sshUsername, _, _ := unstructured.NestedString(vm.Object, "spec", "ssh_username")
+            vmType, _, _ := unstructured.NestedString(vm.Object, "metadata", "labels", "vm-type")
+            
+            log.Printf("  📋 VirtualMachine: %s, User: %s, Status: %s, IP: %s, SSH: %s, Type: %s", 
+                vm.GetName(), user, status, publicIP, sshUsername, vmType)
         }
     }
     
@@ -547,8 +670,9 @@ func discoverVMProvisioningRequests(client dynamic.Interface) int {
             session, _, _ := unstructured.NestedString(req.Object, "spec", "session")
             state, _, _ := unstructured.NestedString(req.Object, "status", "state")
             vmIP, _, _ := unstructured.NestedString(req.Object, "status", "vmIP")
-            log.Printf("  📋 VMProvisioningRequest: %s, User: %s, Session: %s, State: %s, IP: %s", 
-                req.GetName(), user, session, state, vmIP)
+            vmType, _, _ := unstructured.NestedString(req.Object, "status", "vmType")
+            log.Printf("  📋 VMProvisioningRequest: %s, User: %s, Session: %s, State: %s, IP: %s, Type: %s", 
+                req.GetName(), user, session, state, vmIP, vmType)
         }
     }
     
@@ -574,15 +698,18 @@ func logStartupSummary(integrationMode, webhookPort string) {
         }
     }
     
-    log.Println("🧹 Orphaned resource cleanup")
-    log.Println("💓 Health monitoring")
-    log.Println("🔍 Resource discovery")
+    log.Println("🔧 SSH Username Auto-Detection: Enabled")
+    log.Println("   🏠 Local VMs (192.168.x.x): ssh_username=kube")
+    log.Println("   🌐 EC2 VMs (public IPs): ssh_username=ubuntu")
+    log.Println("🧹 Orphaned resource cleanup: Enabled")
+    log.Println("💓 Health monitoring: Enabled")
+    log.Println("🔍 Resource discovery: Enabled")
     
     if os.Getenv("ENABLE_WEBHOOK") == "true" {
         log.Printf("🌐 Webhook server: Port %s", webhookPort)
     }
     
     log.Println("🎉 =============================================")
-    log.Println("🎯 Ready to provision VMs!")
+    log.Println("🎯 Ready to provision VMs with correct SSH users!")
     log.Println("🎉 =============================================")
 }
