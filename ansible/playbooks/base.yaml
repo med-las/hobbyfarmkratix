@@ -4,6 +4,12 @@
   hosts: target
   become: yes
   tasks:
+    - name: Update system packages
+      apt:
+        upgrade: safe
+        update_cache: yes
+        cache_valid_time: 3600
+
     - name: Clean up any existing Docker repositories first
       block:
         - name: Remove conflicting Docker repository files
